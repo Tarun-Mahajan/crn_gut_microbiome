@@ -635,7 +635,9 @@ def compute_Ri_bal(df_speciesMetab, df_speciesAbun_prev, \
     return Ri_fit
 
 def compute_growth_ratio_iterate_blind(df_speciesAbun_prev, df_speciesAbun_next, p_tmp, Ri, growth_ratios_, \
-                                       ratio_means_, df_speciesMetab, norm_=True):
+                                       ratio_means_, \
+                                       df_speciesMetab, norm_=True, \
+                                       metabs_cluster_id=None):
     df_speciesAbun_ratio_new = df_speciesAbun_prev.copy()
     for col_ in range(df_speciesAbun_prev.shape[1]):
         df_speciesAbun_ratio_new.iloc[:, col_] = growth_ratios_.iloc[:, col_].values
@@ -654,6 +656,9 @@ def compute_growth_ratio_iterate_blind(df_speciesAbun_prev, df_speciesAbun_next,
 #         pass_ = int(sample_.split("_")[0][1])
 #         brep_ = int(sample_.split("_")[1][1])
         A_train_sample = mat_cons_abun_split_list_tmp[sample_][id_species, :]
+        if metabs_cluster_id is not None:
+            A_train_sample = \
+                weighted_avg_consumption(A_train_sample, metabs_cluster_id)
         sample_id = sample_names_split.index(sample_)
         tmp = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
         id_notkeep = np.where((df_speciesAbun_prev[sample_].values == 1e-8) & \
@@ -1750,7 +1755,8 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
                                           num_passages=6, num_iter=100, \
                                           thresh_zero=1e-8, Ri_ss=True, plot_=True, \
                                           save_data_obj=True, \
-                                          return_sensitivity_ana=False, num_brep=3):
+                                          return_sensitivity_ana=False, num_brep=3, \
+                                          metabs_cluster_id=None):
     num_species = df_speciesMetab_cluster.shape[0]
 
     # simulate inoculum abundances and initial growth ratios
@@ -1842,7 +1848,8 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
                                                         # growth_ratio_prev_.copy(), \
                                                         growth_rate_all[iter_id].copy(), \
                                                         None, df_speciesMetab_tmp,
-                                                        norm_=False)
+                                                        norm_=False, \
+                                                        metabs_cluster_id=metabs_cluster_id)
                 else:
                     df_growth_rate = \
                         compute_growth_ratio_iterate_blind(df_speciesAbun_prev_tmp_.copy(), \
@@ -1850,7 +1857,8 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
                                                            p_tmp, Ri_avg.copy(), \
                                                            growth_rate_all[iter_id].copy(), \
                                                            None, df_speciesMetab_tmp,
-                                                           norm_=False)
+                                                           norm_=False, \
+                                                           metabs_cluster_id=metabs_cluster_id)
 
                 growth_rate_all[iter_] = df_growth_rate.copy()
 
@@ -2982,6 +2990,8 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
     num_species = df_speciesMetab_cluster.shape[0]
     df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
     num_metabs = df_speciesMetab_tmp.shape[1]
+    if metabs_cluster_id is not None:
+        num_metabs = len(metabs_cluster_id)
 
     # data for dynamic fit
     pass_keep = remove_passages(pass_rm, num_passages=num_passages, num_brep=num_brep)
@@ -3012,8 +3022,10 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                         metabs_cluster_id=metabs_cluster_id)
 
         if use_loo:
-            Ri_noMicrocosm_dynamicAll_fit_all[count_p] = np.zeros((num_species, num_metabs))
-            Ri_noMicrocosm_dynamicAll_fit_avg[count_p] = np.zeros((num_metabs))
+            Ri_noMicrocosm_dynamicAll_fit_all[count_p] = \
+                np.zeros((num_species, num_metabs))
+            Ri_noMicrocosm_dynamicAll_fit_avg[count_p] = \
+                np.zeros((num_metabs))
             count_species = 0
             for species_ in range(num_species):
                 id_species = list(set(range(num_species)) - set([species_]))
@@ -3365,3 +3377,283 @@ def plot_panel_pred_vs_obs_abundance_blind(dir_save_abun_obj, \
 #                          df_speciesAbun_next, df_speciesAbun_ratio, p_tmp, \
 #                          df_speciesMetab_cluster):
     
+def load_data():
+    data_dir = os.path.abspath(os.path.join(os.getcwd(), \
+                                            '..', 'data', 'jin_pollard'))
+    
+    # metab names
+    # metabolite names and indices of the selected metabolites (metabolites used for the 
+    # species-metabolite consumption matrix, c_species^metabolite)
+    file_metabNames = os.path.join(data_dir, 
+                                    "metabolites_list_FC.csv")
+    df_metabNames = pd.read_csv(file_metabNames, sep=",", header=0)
+
+    file_metabIds = os.path.join(data_dir, 
+                                    "metabolite_indices.csv")
+    df_metabIds = pd.read_csv(file_metabIds, sep=",", header=None)
+
+    metab_names = df_metabNames.iloc[:, 1].values[df_metabIds.iloc[:, 0].values - 1]
+
+    unique_, counts_ = np.unique(metab_names, return_counts=True)
+
+    id_rep = np.where(counts_ > 1)[0]
+
+    for rep_ in id_rep:
+        id_m = np.where(metab_names == unique_[rep_])[0]
+        
+        for count_, id_ in enumerate(id_m):
+            metab_names[id_] = f'{metab_names[id_]}_{count_}'
+    
+    # species names
+    # species names and indices of the selected species (metabolites used for the 
+    # species abundance matrix, B_species_k)
+    file_speciesNames = os.path.join(data_dir, 
+                                    "species_list.csv")
+    df_speciesNames = pd.read_csv(file_speciesNames, sep=",", header=0)
+
+    file_speciesIds = os.path.join(data_dir, 
+                                    "species_indices.csv")
+    df_speciesIds = pd.read_csv(file_speciesIds, sep=",", header=None)
+    species_names = \
+        df_speciesNames.iloc[:, 0].values[df_speciesIds.iloc[:, 0].values - 1]
+    
+
+    # species metabolite consumption matrix
+    # species-metabolite consumption matrix, c_species^metabolite
+    file_speciesMetab = os.path.join(data_dir, 
+                                    "species_metabolite_consumption_matrix.csv")
+    thresh_zero_metab = 0
+    df_speciesMetab = pd.read_csv(file_speciesMetab, sep=",", header=None)
+    df_speciesMetab[df_speciesMetab == 0] = thresh_zero_metab
+    num_species, num_metabs = df_speciesMetab.shape
+    df_speciesMetab.columns = metab_names
+    df_speciesMetab.index = species_names
+
+    # species abundance matrix nomicrocosm
+    # species abundances for all passages and bioreplicates
+    num_passages = 6
+    num_bioRep = 3
+    file_speciesAbun = os.path.join(data_dir, 
+                                    "species_abundances.csv")
+    df_speciesAbun = pd.read_csv(file_speciesAbun, sep=",", header=None)
+    df_speciesAbun.columns = create_abundance_header_new(num_bioRep=num_bioRep, num_passages=num_passages)
+    df_speciesAbun_raw = df_speciesAbun.copy()
+    thresh_zero = 1e-8
+    df_speciesAbun[df_speciesAbun == 0] = thresh_zero
+    df_speciesAbun.index = species_names
+    df_speciesAbun_T = df_speciesAbun.copy()
+    df_speciesAbun_T = df_speciesAbun_T.transpose()
+
+    # species abundance matrix agar
+    # species abundances for all passages and bioreplicates
+    num_passages = 6
+    num_bioRep = 3
+    file_speciesAbun_super_agar = os.path.join(data_dir, 
+                                    "species_abundances_plain_agar_supernatant.csv")
+    df_speciesAbun_super_agar = pd.read_csv(file_speciesAbun_super_agar, sep=",", header=None)
+    df_speciesAbun_super_agar.columns = \
+        create_abundance_header_new(num_bioRep=num_bioRep, num_passages=num_passages)
+    df_speciesAbun_super_agar_raw = df_speciesAbun_super_agar.copy()
+    thresh_zero = 1e-8
+    df_speciesAbun_super_agar[df_speciesAbun_super_agar == 0] = thresh_zero
+    df_speciesAbun_super_agar.index = species_names
+    df_speciesAbun_super_agar_T = df_speciesAbun_super_agar.copy()
+    df_speciesAbun_super_agar_T = df_speciesAbun_super_agar_T.transpose()
+
+    # species abundance matrix mucin
+    # species abundances for all passages and bioreplicates
+    num_passages = 6
+    num_bioRep = 3
+    file_speciesAbun_mucin = os.path.join(data_dir, 
+                                    "species_abundances_mucin_supernatant.csv")
+    df_speciesAbun_mucin = pd.read_csv(file_speciesAbun_mucin, sep=",", header=None)
+    df_speciesAbun_mucin.columns = \
+        create_abundance_header_new(num_bioRep=num_bioRep, num_passages=num_passages)
+    df_speciesAbun_mucin_raw = df_speciesAbun_mucin.copy()
+    thresh_zero = 1e-8
+    df_speciesAbun_mucin[df_speciesAbun_mucin == 0] = thresh_zero
+    df_speciesAbun_mucin.index = species_names
+    df_speciesAbun_mucin_T = df_speciesAbun_mucin.copy()
+    df_speciesAbun_mucin_T = df_speciesAbun_mucin_T.transpose()
+
+    # species abundance matrix inoculum
+    file_speciesAbun = os.path.join(data_dir, 
+                                    "species_abundances_inoculum.csv")
+    df_speciesAbun_inoc = pd.read_csv(file_speciesAbun, sep=",", header=None)
+    df_speciesAbun_inoc.columns = ["inoculum"]
+    df_speciesAbun_inoc[df_speciesAbun_inoc == 0] = thresh_zero
+    df_speciesAbun_inoc.index = species_names
+
+    # species previous, next abundances and growth ratio, no microcosm
+    passages_ = np.array(['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])
+    reps_ = np.array(['r0', 'r1', 'r2'])
+    df_speciesAbun_ratio = pd.DataFrame()
+    df_speciesAbun_ratio_corr = pd.DataFrame()
+    df_speciesAbun_new = pd.DataFrame()
+    df_speciesAbun_prev = pd.DataFrame()
+    df_speciesAbun_next = pd.DataFrame()
+    df_speciesAbun_split = pd.DataFrame()
+    count_ = 0
+    brep_vec = list(range(num_bioRep))
+    for rep_ in reps_:
+        for pass_ in range(1, len(passages_)):
+            col_1 = passages_[pass_ - 1] + "_" + rep_
+            col_2 = passages_[pass_] + "_" + rep_
+            
+            df_speciesAbun_prev[col_2] = df_speciesAbun[col_1].values
+            df_speciesAbun_next[col_2] = df_speciesAbun[col_2].values
+            
+            array_1 = np.array(df_speciesAbun[col_2].values / df_speciesAbun[col_1].values)
+            array_2 = np.array(df_speciesAbun[col_2].values)
+            array_3 = np.array(df_speciesAbun[col_1].values)
+            
+            df_speciesAbun_new[col_1] = df_speciesAbun[col_1].values
+            df_speciesAbun_new[col_2] = df_speciesAbun[col_2].values
+            df_speciesAbun_ratio[col_2] = array_1.copy()
+            df_speciesAbun_ratio_corr[col_2] = array_1.copy()
+            id_ = np.where((array_3 == thresh_zero) & (array_2 == thresh_zero))[0]
+    #         id_ = np.where((array_2 == thresh_zero))[0]
+    #         id_ = np.where(array_1 == 1)[0]
+            
+            if len(id_) > 0:
+                df_speciesAbun_ratio.iloc[id_, count_] = -1
+                rep_alt = list(set(reps_) - set([rep_]))
+                ratio_vec = []
+                for id_tmp in id_:
+                    abun_alt_ratio = []
+                    for rep__ in rep_alt:
+                        col_1_ = passages_[pass_ - 1] + "_" + rep__
+                        col_2_ = passages_[pass_] + "_" + rep__
+                        val_1 = df_speciesAbun[col_1_].values[id_tmp]
+                        val_2 = df_speciesAbun[col_2_].values[id_tmp]
+                        if (val_1 != thresh_zero) | (val_2 != thresh_zero):
+                            abun_alt_ratio.append(val_2 / val_1)
+                    if len(abun_alt_ratio) != 0:
+                        df_speciesAbun_ratio_corr.iloc[id_tmp, count_] = \
+                            np.exp(np.mean(np.log10(np.array(abun_alt_ratio))))
+                    else:
+                        df_speciesAbun_ratio_corr.iloc[id_tmp, count_] = -1
+                    
+            count_ += 1
+
+    # species previous, next abundances and growth ratio, agar
+    # previous and next abundances for supernatant agar
+    passages_ = np.array(['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])
+    reps_ = np.array(['r0', 'r1', 'r2'])
+    df_speciesAbun_super_agar_ratio = pd.DataFrame()
+    df_speciesAbun_super_agar_ratio_corr = pd.DataFrame()
+    df_speciesAbun_super_agar_new = pd.DataFrame()
+    df_speciesAbun_super_agar_prev = pd.DataFrame()
+    df_speciesAbun_super_agar_next = pd.DataFrame()
+    df_speciesAbun_super_agar_split = pd.DataFrame()
+    count_ = 0
+    brep_vec = list(range(num_bioRep))
+    for rep_ in reps_:
+        for pass_ in range(1, len(passages_)):
+            col_1 = passages_[pass_ - 1] + "_" + rep_
+            col_2 = passages_[pass_] + "_" + rep_
+            
+            df_speciesAbun_super_agar_prev[col_2] = df_speciesAbun_super_agar[col_1].values
+            df_speciesAbun_super_agar_next[col_2] = df_speciesAbun_super_agar[col_2].values
+            
+            array_1 = np.array(df_speciesAbun_super_agar[col_2].values / df_speciesAbun_super_agar[col_1].values)
+            array_2 = np.array(df_speciesAbun_super_agar[col_2].values)
+            array_3 = np.array(df_speciesAbun_super_agar[col_1].values)
+            
+            df_speciesAbun_super_agar_new[col_1] = df_speciesAbun_super_agar[col_1].values
+            df_speciesAbun_super_agar_new[col_2] = df_speciesAbun_super_agar[col_2].values
+            df_speciesAbun_super_agar_ratio[col_2] = array_1.copy()
+            df_speciesAbun_super_agar_ratio_corr[col_2] = array_1.copy()
+            id_ = np.where((array_3 == thresh_zero) & (array_2 == thresh_zero))[0]
+    #         id_ = np.where((array_2 == thresh_zero))[0]
+    #         id_ = np.where(array_1 == 1)[0]
+            
+            if len(id_) > 0:
+                df_speciesAbun_super_agar_ratio.iloc[id_, count_] = -1
+                rep_alt = list(set(reps_) - set([rep_]))
+                ratio_vec = []
+                for id_tmp in id_:
+                    Abun_super_agar_alt_ratio = []
+                    for rep__ in rep_alt:
+                        col_1_ = passages_[pass_ - 1] + "_" + rep__
+                        col_2_ = passages_[pass_] + "_" + rep__
+                        val_1 = df_speciesAbun_super_agar[col_1_].values[id_tmp]
+                        val_2 = df_speciesAbun_super_agar[col_2_].values[id_tmp]
+                        if (val_1 != thresh_zero) | (val_2 != thresh_zero):
+                            Abun_super_agar_alt_ratio.append(val_2 / val_1)
+                    if len(Abun_super_agar_alt_ratio) != 0:
+                        df_speciesAbun_super_agar_ratio_corr.iloc[id_tmp, count_] = \
+                            np.exp(np.mean(np.log10(np.array(Abun_super_agar_alt_ratio))))
+                    else:
+                        df_speciesAbun_super_agar_ratio_corr.iloc[id_tmp, count_] = -1
+                    
+            count_ += 1
+
+    # species previous, next abundances and growth ratio, mucin
+    # previous and next abundances for mucin agar
+    passages_ = np.array(['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])
+    reps_ = np.array(['r0', 'r1', 'r2'])
+    df_speciesAbun_mucin_ratio = pd.DataFrame()
+    df_speciesAbun_mucin_ratio_corr = pd.DataFrame()
+    df_speciesAbun_mucin_new = pd.DataFrame()
+    df_speciesAbun_mucin_prev = pd.DataFrame()
+    df_speciesAbun_mucin_next = pd.DataFrame()
+    df_speciesAbun_mucin_split = pd.DataFrame()
+    count_ = 0
+    brep_vec = list(range(num_bioRep))
+    for rep_ in reps_:
+        for pass_ in range(1, len(passages_)):
+            col_1 = passages_[pass_ - 1] + "_" + rep_
+            col_2 = passages_[pass_] + "_" + rep_
+            
+            df_speciesAbun_mucin_prev[col_2] = df_speciesAbun_mucin[col_1].values
+            df_speciesAbun_mucin_next[col_2] = df_speciesAbun_mucin[col_2].values
+            
+            array_1 = np.array(df_speciesAbun_mucin[col_2].values / df_speciesAbun_mucin[col_1].values)
+            array_2 = np.array(df_speciesAbun_mucin[col_2].values)
+            array_3 = np.array(df_speciesAbun_mucin[col_1].values)
+            
+            df_speciesAbun_mucin_new[col_1] = df_speciesAbun_mucin[col_1].values
+            df_speciesAbun_mucin_new[col_2] = df_speciesAbun_mucin[col_2].values
+            df_speciesAbun_mucin_ratio[col_2] = array_1.copy()
+            df_speciesAbun_mucin_ratio_corr[col_2] = array_1.copy()
+            id_ = np.where((array_3 == thresh_zero) & (array_2 == thresh_zero))[0]
+    #         id_ = np.where((array_2 == thresh_zero))[0]
+    #         id_ = np.where(array_1 == 1)[0]
+            
+            if len(id_) > 0:
+                df_speciesAbun_mucin_ratio.iloc[id_, count_] = -1
+                rep_alt = list(set(reps_) - set([rep_]))
+                ratio_vec = []
+                for id_tmp in id_:
+                    Abun_mucin_alt_ratio = []
+                    for rep__ in rep_alt:
+                        col_1_ = passages_[pass_ - 1] + "_" + rep__
+                        col_2_ = passages_[pass_] + "_" + rep__
+                        val_1 = df_speciesAbun_mucin[col_1_].values[id_tmp]
+                        val_2 = df_speciesAbun_mucin[col_2_].values[id_tmp]
+                        if (val_1 != thresh_zero) | (val_2 != thresh_zero):
+                            Abun_mucin_alt_ratio.append(val_2 / val_1)
+                    if len(Abun_mucin_alt_ratio) != 0:
+                        df_speciesAbun_mucin_ratio_corr.iloc[id_tmp, count_] = \
+                            np.exp(np.mean(np.log10(np.array(Abun_mucin_alt_ratio))))
+                    else:
+                        df_speciesAbun_mucin_ratio_corr.iloc[id_tmp, count_] = -1
+                    
+            count_ += 1
+
+    return df_speciesMetab, df_speciesAbun, \
+            df_speciesAbun_super_agar, \
+            df_speciesAbun_mucin, \
+            df_speciesAbun_inoc, \
+            df_speciesAbun_ratio, \
+            df_speciesAbun_super_agar_ratio, \
+            df_speciesAbun_mucin_ratio, \
+            df_speciesAbun_prev, \
+            df_speciesAbun_super_agar_prev, \
+            df_speciesAbun_mucin_prev, \
+            df_speciesAbun_next, \
+            df_speciesAbun_super_agar_next, \
+            df_speciesAbun_mucin_next, metab_names, \
+            species_names
+
