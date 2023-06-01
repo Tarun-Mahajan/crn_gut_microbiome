@@ -2977,7 +2977,7 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                   df_speciesAbun_ratio_mdl, p_vec_new, \
                   file_save, num_passages=5, pass_rm=[0, 1, 2], \
                   save_data=True, verbose=True, method="linear", alpha=0, \
-                  use_loo=True, df_speciesAbun_ratio_nonoise=None, num_brep=3. \
+                  use_loo=True, df_speciesAbun_ratio_nonoise=None, num_brep=3, \
                   metabs_cluster_id=None):
     num_species = df_speciesMetab_cluster.shape[0]
     df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
