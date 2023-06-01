@@ -1756,7 +1756,8 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
                                           thresh_zero=1e-8, Ri_ss=True, plot_=True, \
                                           save_data_obj=True, \
                                           return_sensitivity_ana=False, num_brep=3, \
-                                          metabs_cluster_id=None):
+                                          metabs_cluster_id=None, \
+                                          df_speciesAbun_mdl_true=None):
     num_species = df_speciesMetab_cluster.shape[0]
 
     # simulate inoculum abundances and initial growth ratios
@@ -1901,8 +1902,12 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
                 id_use.append(pass_ + 1 + rep_ * num_passages)
             # print(id_use)
             # print(df_speciesAbun_mdl)
-            x = \
-                np.array(df_speciesAbun_mdl.iloc[:, id_use].copy())
+            if df_speciesAbun_mdl_true is None:
+                x = \
+                    np.array(df_speciesAbun_mdl.iloc[:, id_use].copy())
+            else:
+                x = \
+                    np.array(df_speciesAbun_mdl_true.iloc[:, id_use].copy())
             # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
             x = x.flatten()
             y = np.array(df_tmp.copy())[:, :].flatten()
