@@ -388,10 +388,19 @@ def compute_Ri_ss(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
     coeff_train_ = nnls(A_train, b_train.flatten())[0]
     return coeff_train_
 
+def weighted_avg_consumption(A_train_sample, metabs_cluster_id):
+    num_clusters = len(metabs_cluster_id)
+    A_train_sample_new = np.zeros((A_train_sample.shape[0], num_clusters))
+    for count_, metabs_id_ in enumerate(metabs_cluster_id):
+        A_train_sample_new[:, count_] = \
+            np.sum(A_train_sample[:, metabs_id_], axis=1)
+    return A_train_sample_new
+
 def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
                df_speciesAbun_ratio, \
                p_tmp, num_passages, id_species, method="linear", alpha=0, \
-               df_speciesAbun_ratio_nonoise=None):
+               df_speciesAbun_ratio_nonoise=None, \
+               metabs_cluster_id=None):
     
     df_speciesAbun_prev_tmp = df_speciesAbun_prev.copy()
     df_speciesAbun_next_tmp = df_speciesAbun_next.copy()
@@ -417,6 +426,9 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
         if pass_ > -1:
             brep_ = int(sample_.split("_")[1][1])
             A_train_sample = mat_cons_abun_split_list_tmp[sample_][id_species, :]
+            if metabs_cluster_id is not None:
+                A_train_sample = \
+                    weighted_avg_consumption(A_train_sample, metabs_cluster_id)
             sample_id = sample_names_split.index(sample_)
             tmp = np.array(df_speciesAbun_ratio_tmp.iloc[id_species, sample_id])
             tmp1 = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
@@ -2965,7 +2977,8 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                   df_speciesAbun_ratio_mdl, p_vec_new, \
                   file_save, num_passages=5, pass_rm=[0, 1, 2], \
                   save_data=True, verbose=True, method="linear", alpha=0, \
-                  use_loo=True, df_speciesAbun_ratio_nonoise=None, num_brep=3):
+                  use_loo=True, df_speciesAbun_ratio_nonoise=None, num_brep=3. \
+                  metabs_cluster_id=None):
     num_species = df_speciesMetab_cluster.shape[0]
     df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
     num_metabs = df_speciesMetab_tmp.shape[1]
@@ -2995,7 +3008,8 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                         df_speciesAbun_next_tmp, df_speciesAbun_ratio_tmp, \
                         p_tmp, num_passages, range(num_species), \
                         method=method, alpha=alpha, \
-                        df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise)
+                        df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise, \
+                        metabs_cluster_id=metabs_cluster_id)
 
         if use_loo:
             Ri_noMicrocosm_dynamicAll_fit_all[count_p] = np.zeros((num_species, num_metabs))
@@ -3008,7 +3022,8 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                             df_speciesAbun_next_tmp, df_speciesAbun_ratio_tmp, \
                             p_tmp, num_passages, id_species, \
                             method=method, alpha=alpha, \
-                            df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise)
+                            df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise, \
+                            metabs_cluster_id=metabs_cluster_id)
                 if np.sum(Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]) <= 1.5:
                     Ri_noMicrocosm_dynamicAll_fit_avg[count_p] += \
                         Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]
