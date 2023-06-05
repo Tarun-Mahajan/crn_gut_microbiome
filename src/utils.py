@@ -134,8 +134,12 @@ def compute_species_metab_matrix_for_nnls(df_cons_abun_prod, df_speciesMetab, nu
 #         df_denom = df_cons_abun_prod.loc[sample_, :]
         df_denom = df_cons_abun_prod[sample_names.index(sample_), :]
         tmp_mat = np.array(df_denom).reshape((1, num_metabs_tmp))
+        id_ = np.where(tmp_mat.flatten() == 0)[0]
+        if len(id_) > 0:
+            print(id_)
         mat_denom = np.matmul(tmp_ones, tmp_mat)
-        mat_cons_abun_list[sample_] = np.divide(np.array(df_speciesMetab.copy().values), mat_denom)
+        mat_cons_abun_list[sample_] = \
+            np.divide(np.array(df_speciesMetab.copy().values), mat_denom)
         
     return sample_names, mat_cons_abun_list
 
@@ -1375,10 +1379,10 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
             
             save_obj = {'growth_rate_all' : growth_rate_all, \
                         'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
-            if return_sensitivity_ana:
-                save_obj_return[pass_] = \
-                    {'growth_rate_all' : growth_rate_all[num_iter - 1], \
-                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
+            # if return_sensitivity_ana:
+            #     save_obj_return[pass_] = \
+            #         {'growth_rate_all' : growth_rate_all[num_iter - 1], \
+            #          'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
             if save_data_obj:
                 with open(file_save, "wb") as file_:
                     pickle.dump(save_obj, file_)  
@@ -1390,49 +1394,59 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                     growth_rate_all[num_iter - 1].copy()[col_].values * \
                     df_speciesAbun_prev_tmp_[col_].values
                 df_tmp[col_] /= np.sum(df_tmp[col_].values)
+            if return_sensitivity_ana:
+                save_obj_return[pass_] = \
+                    {'growth_rate_all' : growth_rate_all[num_iter - 1], \
+                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
+                     'df_speciesAbun_next' : df_tmp.copy()}
 
             b_ = range(3)
             x = \
                 np.array(df_speciesAbun_mdl.copy().iloc[:, [pass_, \
                                                             pass_ + num_passages, \
                                                             pass_ + 2 * num_passages]])
-            x = 10**(np.mean(np.log10(x), axis=1)).flatten()
-            y = np.array(df_tmp.copy())[:, :].flatten()
+            x[x == 0] = 1e-8
+            # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
+            x = x.flatten()
+            # y = np.array(df_tmp.copy())[:, :].flatten()
+            y = np.array(df_tmp.copy())[:, :]
+            y = np.hstack([y, y, y]).flatten()
+            # print(x.shape)
             y[y == 0] = thresh_zero
             id_ = np.where((x > 0) & (y > 0))[0]
-            id_ord = np.where((x > 0) & (y > 0))[0]
+            # id_ord = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
             y = np.log10(y[id_])
             y[y <= -8] = -8
 
-            if pass_ > 0:
-                pass_tmp = pass_ - 1
-                df_speciesAbun_ratio_tmp_1 = \
-                    df_speciesAbun_ratio_mdl.copy().iloc[:, [pass_tmp, pass_tmp + 5, \
-                                                             pass_tmp + 10]]
-                x_r = \
-                    np.array(df_speciesAbun_ratio_tmp_1)
-                x_new = -1 * np.ones(x_r.shape[0])
-                for row_ in range(x_r.shape[0]):
-                    id_tmp = np.where(x_r[row_, :] > 0)[0]
-                    if len(id_tmp) > 0:
-                        x_new[row_] = 10**np.mean(np.log10(x_r[row_, id_tmp]))
-                # id_tmp = np.where(x_new > 0)[0]
-                # x_r = x_new[id_tmp]
-                x_r = x_new
-                x_r[x_r < 0] = 1 
-            else:
-                x_r = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]])
-                x_r = 10**np.mean(np.log10(x_r), axis=1).flatten()
-                x_r /= np.array(df_speciesAbun_inoc).flatten()
+            # if pass_ > 0:
+            #     pass_tmp = pass_ - 1
+            #     df_speciesAbun_ratio_tmp_1 = \
+            #         df_speciesAbun_ratio_mdl.copy().iloc[:, [pass_tmp, pass_tmp + 5, \
+            #                                                  pass_tmp + 10]]
+            #     x_r = \
+            #         np.array(df_speciesAbun_ratio_tmp_1)
+            #     x_new = -1 * np.ones(x_r.shape[0])
+            #     for row_ in range(x_r.shape[0]):
+            #         id_tmp = np.where(x_r[row_, :] > 0)[0]
+            #         if len(id_tmp) > 0:
+            #             x_new[row_] = 10**np.mean(np.log10(x_r[row_, id_tmp]))
+            #     # id_tmp = np.where(x_new > 0)[0]
+            #     # x_r = x_new[id_tmp]
+            #     x_r = x_new
+            #     x_r[x_r < 0] = 1 
+            # else:
+            #     x_r = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]])
+            #     x_r = 10**np.mean(np.log10(x_r), axis=1).flatten()
+            #     x_r /= np.array(df_speciesAbun_inoc).flatten()
 
-            # id_ = np.where((x > 0) & (y > 0))[0]
-            x_r = x_r[id_ord]
+            # # id_ = np.where((x > 0) & (y > 0))[0]
+            # x_r = x_r[id_ord]
 
-            x_r[x_r > 1] = 3
-            x_r[x_r == 1] = 2
-            x_r[x_r < 1] = 1
-            growth_ord_tmp = [100*n**2 for n in x_r]
+            # x_r[x_r > 1] = 3
+            # x_r[x_r == 1] = 2
+            # x_r[x_r < 1] = 1
+            # growth_ord_tmp = [100*n**2 for n in x_r]
 
             abs_mean_error = np.sqrt(np.mean(np.power(y - x, 2)))
             if return_sensitivity_ana:
@@ -1565,13 +1579,15 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                 abun_prev = (np.array(df_speciesAbun_inoc).flatten())
 
             y[y == 0] = 1e-8
+            x[x == 0] = 1e-8
             id_ = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
             y = np.log10(y[id_])
             # y=np.random.permutation(x)
             y[y <= -4] = -4
+            x[x <= -4] = -4
             df_plt = pd.DataFrame(data={"x" : x, "y" : y, \
-                                        "abun_prev" : abun_prev})
+                                        "abun_prev" : abun_prev[id_]})
             prev_ord = np.argsort(abun_prev)
             prev_ord_tmp = [0.2*n**2 for n in prev_ord]
             abs_mean_error = np.sqrt(np.mean(np.power(y - x, 2)))
@@ -1713,7 +1729,7 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
     del df_corr_slope
 
     if return_sensitivity_ana:
-        return save_obj, RMSE_obj
+        return save_obj_return, RMSE_obj
     # for pass_ in range(num_passages):
     #     fig, axes = plt.subplots(1, 1, figsize=(20, 14), sharey="row", sharex="col")
     #     fig.suptitle(f'corr, slope for predicted vs observed growth ratio \n' + \
