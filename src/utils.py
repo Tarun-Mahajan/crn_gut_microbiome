@@ -404,7 +404,8 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
                df_speciesAbun_ratio, \
                p_tmp, num_passages, id_species, method="linear", alpha=0, \
                df_speciesAbun_ratio_nonoise=None, \
-               metabs_cluster_id=None):
+               metabs_cluster_id=None, get_prod=False, B_alone=None, \
+               df_speciesMetab_prod=None, prod_use_prev=True):
     
     df_speciesAbun_prev_tmp = df_speciesAbun_prev.copy()
     df_speciesAbun_next_tmp = df_speciesAbun_next.copy()
@@ -414,6 +415,17 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
     else:
         df_speciesAbun_ratio_new = df_speciesAbun_ratio.copy()
     num_species_tmp = df_speciesAbun_prev.shape[0]
+
+    df_speciesAbun_split = \
+        geometric_avg(df_speciesAbun_prev_tmp, df_speciesAbun_next_tmp, p=p_tmp)
+    if prod_use_prev:
+        df_split = df_speciesAbun_prev_tmp.copy()
+    else:
+        df_split = geometric_avg(df_speciesAbun_prev_tmp.copy(), \
+                                 df_speciesAbun_next_tmp.copy(), p=p_tmp)
+    prod_metabs_cond = \
+        get_prod_term(df_speciesMetab_prod, df_split.copy(), B_alone, \
+                      get_prod=get_prod)
 
     sample_names_split = list(df_speciesAbun_prev_tmp.columns.values)
     count_ = 0 
@@ -429,7 +441,8 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
                                  df_speciesAbun_ratio=df_speciesAbun_ratio_tmp)
         if pass_ > -1:
             brep_ = int(sample_.split("_")[1][1])
-            A_train_sample = mat_cons_abun_split_list_tmp[sample_][id_species, :]
+            A_train_sample = mat_cons_abun_split_list_tmp[sample_][id_species, :] * \
+                prod_metabs_cond[sample_][id_species, :]
             if metabs_cluster_id is not None:
                 A_train_sample = \
                     weighted_avg_consumption(A_train_sample, metabs_cluster_id)
@@ -641,7 +654,10 @@ def compute_Ri_bal(df_speciesMetab, df_speciesAbun_prev, \
 def compute_growth_ratio_iterate_blind(df_speciesAbun_prev, df_speciesAbun_next, p_tmp, Ri, growth_ratios_, \
                                        ratio_means_, \
                                        df_speciesMetab, norm_=True, \
-                                       metabs_cluster_id=None):
+                                       metabs_cluster_id=None, \
+                                       get_prod=False, B_alone=None, \
+                                       df_speciesMetab_prod=None, \
+                                       prod_use_prev=True):
     df_speciesAbun_ratio_new = df_speciesAbun_prev.copy()
     for col_ in range(df_speciesAbun_prev.shape[1]):
         df_speciesAbun_ratio_new.iloc[:, col_] = growth_ratios_.iloc[:, col_].values
@@ -650,6 +666,14 @@ def compute_growth_ratio_iterate_blind(df_speciesAbun_prev, df_speciesAbun_next,
     sample_names_split, mat_cons_abun_split_list_tmp = \
         iterate_growth_ratio(df_speciesMetab.copy(), df_speciesAbun_prev.copy(), \
                              df_speciesAbun_next.copy(), p_=p_tmp)
+    if prod_use_prev:
+        df_split = df_speciesAbun_prev.copy()
+    else:
+        df_split = geometric_avg(df_speciesAbun_prev.copy(), \
+                                 df_speciesAbun_next.copy(), p=p_tmp)
+    prod_metabs_cond = \
+        get_prod_term(df_speciesMetab_prod, df_split.copy(), B_alone, \
+                      get_prod=get_prod)
 
     id_species = range(df_speciesAbun_prev.shape[0])
     count_ = 0
@@ -663,6 +687,7 @@ def compute_growth_ratio_iterate_blind(df_speciesAbun_prev, df_speciesAbun_next,
         if metabs_cluster_id is not None:
             A_train_sample = \
                 weighted_avg_consumption(A_train_sample, metabs_cluster_id)
+        A_train_sample = A_train_sample * prod_metabs_cond[sample_][id_species, :]
         sample_id = sample_names_split.index(sample_)
         tmp = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
         id_notkeep = np.where((df_speciesAbun_prev[sample_].values == 1e-8) & \
@@ -1043,30 +1068,42 @@ def hierarchical_cluster_metabs(df_speciesMetab, n_clusters, metric="euclidean",
     
     return cluster_labels_new
 
-def avg_consumption_df(df_speciesMetab, df_metabs_clusters, \
+def avg_consumption_df(df_speciesMetab, df_speciesMetab_prod, df_metabs_clusters, \
                        metab_cluster_mean_func="linear"):
     num_species = df_speciesMetab.shape[0]
-    df_speciesMetab_tmp = df_speciesMetab.copy()
-    df_speciesMetab_tmp[df_speciesMetab_tmp == 0] = 1e-6
+    # df_speciesMetab_tmp = df_speciesMetab.copy()
+    # df_speciesMetab_tmp[df_speciesMetab_tmp == 0] = 1e-6
     df_speciesMetab_cluster = pd.DataFrame()
+    df_speciesMetab_prod_cluster = pd.DataFrame()
     for metab_label in range(df_metabs_clusters.shape[0]):
         id_metabs = df_metabs_clusters.iloc[metab_label, 2]
         consm_vec = np.zeros((num_species))
+        consm_vec_prod = np.zeros((num_species))
         
         if metab_cluster_mean_func == "geometric":
             for id_ in id_metabs:
-                consm_vec += np.log10(df_speciesMetab_tmp.iloc[:, id_].values)
+                consm_vec += np.log(1 - df_speciesMetab.iloc[:, id_].values)
+                consm_vec_prod += np.log(1 + df_speciesMetab_prod.iloc[:, id_].values)
             consm_vec /= len(id_metabs)
-            df_speciesMetab_cluster[metab_label] = 10**consm_vec
+            consm_vec = 1 - np.exp(consm_vec)
+            consm_vec_prod /= len(id_metabs)
+            consm_vec_prod = np.exp(consm_vec_prod) - 1
+            df_speciesMetab_cluster[metab_label] = consm_vec
+            df_speciesMetab_prod_cluster[metab_label] = consm_vec_prod
         elif metab_cluster_mean_func == "linear":
             for id_ in id_metabs:
                 consm_vec += df_speciesMetab.copy().iloc[:, id_].values
+                consm_vec_prod += df_speciesMetab_prod.copy().iloc[:, id_].values
             consm_vec /= len(id_metabs)
+            consm_vec_prod /= len(id_metabs)
             df_speciesMetab_cluster[metab_label] = consm_vec
+            df_speciesMetab_prod_cluster[metab_label] = consm_vec_prod
     df_speciesMetab_cluster.index = df_speciesMetab.index.values
-    return df_speciesMetab_cluster
+    df_speciesMetab_prod_cluster.index = df_speciesMetab.index.values
+    return df_speciesMetab_cluster, df_speciesMetab_prod_cluster
 
-def get_metabs_clusters(df_speciesMetab, bin_thresh=0.3, species_num_thresh=5, \
+def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
+                        species_num_thresh=5, \
                         n_clusters_hclust=10, distance_metric="euclidean", \
                         method_cluster="ward"):
 
@@ -1095,6 +1132,8 @@ def get_metabs_clusters(df_speciesMetab, bin_thresh=0.3, species_num_thresh=5, \
     id_new = np.hstack([id_metabs_clust, id_metabs_single_clust])
     df_speciesMetab_new = df_speciesMetab.copy()
     df_speciesMetab_new = df_speciesMetab_new.iloc[:, id_new]
+    df_speciesMetab_prod_new = df_speciesMetab_prod.copy()
+    df_speciesMetab_prod_new = df_speciesMetab_prod_new.iloc[:, id_new]
     metab_names = np.hstack([df_tmp_clust.columns.values, \
                              df_speciesMetab.columns.values[id_metabs_single_clust]])
     
@@ -1117,7 +1156,7 @@ def get_metabs_clusters(df_speciesMetab, bin_thresh=0.3, species_num_thresh=5, \
     df_metabs_clusters["cluster_metab_IDs"] = cluster_metab_IDs
     df_metabs_clusters["cluser_metab_names"] = cluser_metab_names
 
-    return df_metabs_clusters, df_speciesMetab_new
+    return df_metabs_clusters, df_speciesMetab_new, df_speciesMetab_prod_new
 
 def fit_ss_Ri(df_speciesMetab_cluster, df_speciesAbun_mdl, \
               df_speciesAbun_prev_mdl, df_speciesAbun_next_mdl, \
@@ -1268,7 +1307,11 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                              num_passages=6, num_iter=100, \
                              thresh_zero=1e-8, Ri_ss=True, plot_=True, \
                              save_data_obj=True, \
-                             return_sensitivity_ana=False):
+                             return_sensitivity_ana=False, \
+                             get_prod=False, \
+                             B_alone=None, \
+                             df_speciesMetab_prod=None, \
+                             prod_use_prev=True):
     num_species = df_speciesMetab_cluster.shape[0]
 
     # simulate inoculum abundances and initial growth ratios
@@ -1353,7 +1396,10 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                                                         # growth_ratio_prev_.copy(), \
                                                         growth_rate_all[iter_id].copy(), \
                                                         None, df_speciesMetab_tmp,
-                                                        norm_=False)
+                                                        norm_=False, get_prod=get_prod, \
+                                                        B_alone=B_alone, \
+                                                        df_speciesMetab_prod=df_speciesMetab_prod, \
+                                                        prod_use_prev=prod_use_prev)
                 else:
                     df_growth_rate = \
                         compute_growth_ratio_iterate_blind(df_speciesAbun_prev_tmp_.copy(), \
@@ -1361,7 +1407,10 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                                                            p_tmp, Ri_avg.copy(), \
                                                            growth_rate_all[iter_id].copy(), \
                                                            None, df_speciesMetab_tmp,
-                                                           norm_=False)
+                                                           norm_=False, get_prod=get_prod, \
+                                                           B_alone=B_alone, \
+                                                           df_speciesMetab_prod=df_speciesMetab_prod, \
+                                                           prod_use_prev=prod_use_prev)
 
                 growth_rate_all[iter_] = df_growth_rate.copy()
             save_dir = \
@@ -1394,11 +1443,6 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                     growth_rate_all[num_iter - 1].copy()[col_].values * \
                     df_speciesAbun_prev_tmp_[col_].values
                 df_tmp[col_] /= np.sum(df_tmp[col_].values)
-            if return_sensitivity_ana:
-                save_obj_return[pass_] = \
-                    {'growth_rate_all' : growth_rate_all[num_iter - 1], \
-                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
-                     'df_speciesAbun_next' : df_tmp.copy()}
 
             b_ = range(3)
             x = \
@@ -1411,8 +1455,18 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
             # y = np.array(df_tmp.copy())[:, :].flatten()
             y = np.array(df_tmp.copy())[:, :]
             y = np.hstack([y, y, y]).flatten()
-            # print(x.shape)
             y[y == 0] = thresh_zero
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names = np.hstack([species_names, species_names, species_names])
+                save_obj_return[pass_] = \
+                    {'growth_ratio_all' : growth_rate_all[num_iter - 1], \
+                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
+                     'df_speciesAbun_next_pred' : y, \
+                     'df_speciesAbun_next_obs' : x, \
+                     'species_names' : species_names}
+            # print(x.shape)
+            
             id_ = np.where((x > 0) & (y > 0))[0]
             # id_ord = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
@@ -1580,6 +1634,14 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
 
             y[y == 0] = 1e-8
             x[x == 0] = 1e-8
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names = np.hstack([species_names, species_names, species_names])
+                if pass_ > 0:
+                    save_obj_return[pass_]['growth_ratio_obs'] = \
+                        np.array(df_speciesAbun_ratio_tmp_1.copy())
+                else:
+                    save_obj_return[pass_]['growth_ratio_obs'] = np.hstack([x, x, x])
             id_ = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
             y = np.log10(y[id_])
@@ -1928,6 +1990,16 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
             x = x.flatten()
             y = np.array(df_tmp.copy())[:, :].flatten()
             y[y == 0] = thresh_zero
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names = np.hstack([species_names, species_names, species_names])
+                save_obj_return[pass_] = \
+                    {'growth_ratio_all' : growth_rate_all[num_iter - 1], \
+                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
+                     'df_speciesAbun_next_pred' : y, \
+                     'df_speciesAbun_next_obs' : x, \
+                     'species_names' : species_names}
+
             id_ = np.where((x > 0) & (y > 0))[0]
             id_ord = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
@@ -2059,6 +2131,14 @@ def blindly_pred_abun_growth_without_inoc(p_vec_new, df_speciesMetab_cluster, \
                 abun_prev = (np.array(df_speciesAbun_inoc).flatten())
 
             y[y == 0] = 1e-8
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names = np.hstack([species_names, species_names, species_names])
+                if pass_ >= 0:
+                    save_obj_return[pass_]['growth_ratio_obs'] = \
+                        np.array(df_speciesAbun_ratio_tmp_1.copy())
+                else:
+                    save_obj_return[pass_]['growth_ratio_obs'] = np.hstack([x, x, x])
             id_ = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
             y = np.log10(y[id_])
@@ -3007,7 +3087,8 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                   file_save, num_passages=5, pass_rm=[0, 1, 2], \
                   save_data=True, verbose=True, method="linear", alpha=0, \
                   use_loo=True, df_speciesAbun_ratio_nonoise=None, num_brep=3, \
-                  metabs_cluster_id=None):
+                  metabs_cluster_id=None, get_prod=False, B_alone=None, \
+                  df_speciesMetab_prod=None, prod_use_prev=True):
     num_species = df_speciesMetab_cluster.shape[0]
     df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
     num_metabs = df_speciesMetab_tmp.shape[1]
@@ -3040,7 +3121,10 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                         p_tmp, num_passages, range(num_species), \
                         method=method, alpha=alpha, \
                         df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise, \
-                        metabs_cluster_id=metabs_cluster_id)
+                        metabs_cluster_id=metabs_cluster_id, get_prod=get_prod, \
+                        B_alone=B_alone, \
+                        df_speciesMetab_prod=df_speciesMetab_prod, \
+                        prod_use_prev=prod_use_prev)
 
         if use_loo:
             Ri_noMicrocosm_dynamicAll_fit_all[count_p] = \
@@ -3056,7 +3140,10 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                             p_tmp, num_passages, id_species, \
                             method=method, alpha=alpha, \
                             df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise, \
-                            metabs_cluster_id=metabs_cluster_id)
+                            metabs_cluster_id=metabs_cluster_id, get_prod=get_prod, \
+                            B_alone=B_alone, \
+                            df_speciesMetab_prod=df_speciesMetab_prod, \
+                            prod_use_prev=prod_use_prev)
                 if np.sum(Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]) <= 1.5:
                     Ri_noMicrocosm_dynamicAll_fit_avg[count_p] += \
                         Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]
@@ -3450,6 +3537,15 @@ def load_data():
     df_speciesMetab.columns = metab_names
     df_speciesMetab.index = species_names
 
+    file_speciesMetab = os.path.join(data_dir, 
+                                    "species_metabolite_production_matrix.csv")
+    thresh_zero_metab = 0
+    df_speciesMetab_prod = pd.read_csv(file_speciesMetab, sep=",", header=None)
+    df_speciesMetab_prod[df_speciesMetab_prod == 0] = thresh_zero_metab
+    # num_species, num_metabs = df_speciesMetab_prod.shape
+    df_speciesMetab_prod.columns = metab_names
+    df_speciesMetab_prod.index = species_names
+
     # species abundance matrix nomicrocosm
     # species abundances for all passages and bioreplicates
     num_passages = 6
@@ -3676,5 +3772,36 @@ def load_data():
             df_speciesAbun_next, \
             df_speciesAbun_super_agar_next, \
             df_speciesAbun_mucin_next, metab_names, \
-            species_names
+            species_names, df_speciesMetab_prod
+
+def get_prod_term(df_speciesMetab_prod, df_speciesAbun_split, B_alone, \
+                  get_prod=False):
+    prod_metabs_cond = {}
+
+    for col_ in df_speciesAbun_split.columns.values:
+        if get_prod:
+            prod_metabs_cond[col_] = \
+                1 + np.matmul(np.array(df_speciesMetab_prod.copy()).transpose(), \
+                              df_speciesAbun_split[col_].values / B_alone)
+            prod_metabs_cond[col_] = \
+                np.matmul(np.ones((df_speciesAbun_split.shape[0], 1)), \
+                          prod_metabs_cond[col_].reshape(1, df_speciesMetab_prod.shape[1]))
+        else:
+            prod_metabs_cond[col_] = \
+                np.ones((df_speciesAbun_split.shape[0], df_speciesMetab_prod.shape[1]))
+    return prod_metabs_cond
+
+def metabs_to_remove_knockdown_species(df_speciesMetab, species_rm):
+    id_metabs = np.where(np.array(df_speciesMetab)[species_rm, :].flatten() != 0)[0]
+
+    id_metabs_rm = []
+    for metab_ in id_metabs:
+        id_species = np.where(np.array(df_speciesMetab)[:, metab_] != 0)[0]
+        if len(id_species) == 1:
+            id_metabs_rm.append(metab_)
+
+    id_metabs = np.arange((df_speciesMetab.shape[1]))
+    id_metabs = np.delete(id_metabs, id_metabs_rm)
+    return id_metabs
+
 
