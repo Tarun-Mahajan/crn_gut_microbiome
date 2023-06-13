@@ -1311,7 +1311,7 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                              get_prod=False, \
                              B_alone=None, \
                              df_speciesMetab_prod=None, \
-                             prod_use_prev=True):
+                             prod_use_prev=True, num_passages_run=6):
     num_species = df_speciesMetab_cluster.shape[0]
 
     # simulate inoculum abundances and initial growth ratios
@@ -1352,7 +1352,7 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
         save_obj_return = {}
         RMSE_obj = {}
     for count_p, p_tmp in enumerate(p_vec_new):
-        for pass_ in range(num_passages):
+        for pass_ in range(num_passages_run):
             if pass_ == 0:
                 df_speciesAbun_prev_tmp_ = \
                     df_speciesAbun_inoc.copy().iloc[:, :]
