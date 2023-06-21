@@ -1318,18 +1318,18 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
     sample_names = df_speciesAbun_mdl.columns.values
     n_breps = 3
     samples_first = sample_names[0 + np.arange(n_breps) * num_passages]
-    ratio_init = np.zeros((num_species))
-    num_rand = 100
-    for rand_ in range(num_rand):
-        ratio_init_rand = np.zeros((num_species, n_breps))
-        for rep_ in range(n_breps):
-            vals_ = np.random.exponential(1 / num_species, num_species)
-            vals_ /= np.sum(vals_)
-            ratio_init_rand[:, rep_] = df_speciesAbun_mdl[samples_first[rep_]].values / \
-                vals_
-        ratio_init += np.mean(np.log10(ratio_init_rand), axis=1)
-    ratio_init /= num_rand
-    ratio_init = 10**ratio_init
+    # ratio_init = np.zeros((num_species))
+    # num_rand = 100
+    # for rand_ in range(num_rand):
+    #     ratio_init_rand = np.zeros((num_species, n_breps))
+    #     for rep_ in range(n_breps):
+    #         vals_ = np.random.exponential(1 / num_species, num_species)
+    #         vals_ /= np.sum(vals_)
+    #         ratio_init_rand[:, rep_] = df_speciesAbun_mdl[samples_first[rep_]].values / \
+    #             vals_
+    #     ratio_init += np.mean(np.log10(ratio_init_rand), axis=1)
+    # ratio_init /= num_rand
+    # ratio_init = 10**ratio_init
     ratio_init = np.ones(num_species)
     # print(ratio_init)
 
@@ -1449,7 +1449,7 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                 np.array(df_speciesAbun_mdl.copy().iloc[:, [pass_, \
                                                             pass_ + num_passages, \
                                                             pass_ + 2 * num_passages]])
-            x[x == 0] = 1e-8
+            x[x == 0] = thresh_zero
             # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
             x = x.flatten()
             # y = np.array(df_tmp.copy())[:, :].flatten()
@@ -1606,11 +1606,12 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
             if pass_ > 0:
                 pass_tmp = pass_ - 1
                 df_speciesAbun_ratio_tmp_1 = \
-                    df_speciesAbun_ratio_mdl.copy().iloc[:, [pass_tmp, pass_tmp + 5, \
-                                                             pass_tmp + 10]]
-                abun_prev = df_speciesAbun_prev_mdl.copy().iloc[:, [pass_tmp, pass_tmp + 5, \
-                                                             pass_tmp + 10]]
+                    df_speciesAbun_ratio_mdl.iloc[:, [pass_tmp, pass_tmp + 5, \
+                                                             pass_tmp + 10]].copy()
+                abun_prev = df_speciesAbun_prev_mdl.iloc[:, [pass_tmp, pass_tmp + 5, \
+                                                             pass_tmp + 10]].copy()
                 abun_prev = np.array(abun_prev)
+                abun_prev[abun_prev == 0] = thresh_zero
                 abun_prev = 10**np.mean(np.log10(abun_prev), axis=1)
                 x = \
                     np.array(df_speciesAbun_ratio_tmp_1)
@@ -1626,11 +1627,14 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                 y = np.array(growth_rate_all[num_iter - 1].copy())[:, :].flatten()
                 y = y[id_tmp]
             else:
-                x = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]])
+                x = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]].copy())
+                x[x == 0] = thresh_zero
                 x = 10**np.mean(np.log10(x), axis=1).flatten()
-                x /= np.array(df_speciesAbun_inoc).flatten()
+                x_inoc_tmp = np.array(df_speciesAbun_inoc.copy()).flatten()
+                x_inoc_tmp[x_inoc_tmp == 0] = thresh_zero
+                x /= x_inoc_tmp
                 y = np.array(growth_rate_all[num_iter - 1].copy())[:, :].flatten()
-                abun_prev = (np.array(df_speciesAbun_inoc).flatten())
+                abun_prev = x_inoc_tmp
 
             y[y == 0] = 1e-8
             x[x == 0] = 1e-8
