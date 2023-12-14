@@ -27,7 +27,8 @@ import statsmodels.api as sm
 # import umap
 from scipy.cluster.hierarchy import dendrogram, linkage
 from sklearn.cluster import AgglomerativeClustering
-
+import statsmodels.api as sm
+import math
 
 def iterate_growth_ratio(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, p_, \
                          df_speciesAbun_ratio=None, power_=1.0):
@@ -5601,10 +5602,12 @@ def get_competition(Ri_avg, df_speciesMetab_cluster, id_1, id_2):
     vec_src = df_speciesMetab_cluster.iloc[id_1, :].values
     vec_dest = df_speciesMetab_cluster.iloc[id_2, :].values
     nnz_dest = len(np.where(Ri_avg * vec_dest != 0)[0])
+    nnz_src = len(np.where(Ri_avg * vec_src != 0)[0])
     nnz_common = len(np.where((Ri_avg * vec_dest * vec_src) != 0)[0])
 #     competition_rand[b_] = nnz_common / nnz_dest
 #         competition_rand[b_] = tmp
     return nnz_common / nnz_dest
+    # return nnz_common / ((nnz_dest + nnz_src) / 2)
 
 def get_competition_weighted(Ri_avg, df_speciesMetab_cluster, id_1, id_2):
     num_species = df_speciesMetab_cluster.shape[0]
@@ -5619,11 +5622,67 @@ def get_competition_weighted(Ri_avg, df_speciesMetab_cluster, id_1, id_2):
     x = vec_src
     y = vec_dest
     id_ = np.where(Ri_avg > 0)[0]
-    x = x[id_] * Ri_avg[id_]
-    y = y[id_] * Ri_avg[id_]
-    competition_ = np.sum(x * y) / \
-        (np.sqrt(np.sum(np.power(x, 2))) * \
-            np.sqrt(np.sum(np.power(y, 2))))
+    # x = x[id_] * Ri_avg[id_]
+    # y = y[id_] * Ri_avg[id_]
+
+    # competition_ = np.sum(x * y) / \
+    #     (np.sqrt(np.sum(np.power(x, 2))) * \
+    #         np.sqrt(np.sum(np.power(y, 2))))
+    num_ = x * y * Ri_avg
+    denom_1 = y * Ri_avg
+    denom_2 = x * Ri_avg
+    Ri_avg_log = np.log10(Ri_avg.copy() + 1e-12)
+    id_ = np.where(Ri_avg > 0)[0]
+    ri_min = np.min(Ri_avg_log[id_])
+    Ri_avg_log += (-ri_min) + 1
+    # competition_ = (2 * np.sum(Ri_avg_log[num_ > 0])) / \
+    #     (np.sum(Ri_avg_log[denom_1 > 0]) + np.sum(Ri_avg_log[denom_2 > 0]))
+    competition_ = (2 * (np.sum((Ri_avg)[num_ > 0]))) / \
+        ((np.sum(Ri_avg[denom_1 > 0])) + \
+         (np.sum(Ri_avg[denom_2 > 0])))
+    return competition_
+
+def get_competition_weighted_2(Ri_avg, df_speciesMetab_cluster, id_1, id_2, abun_1, abun_2, \
+                               metab_rm=None):
+    num_species = df_speciesMetab_cluster.shape[0]
+    id_species = np.arange(num_species)
+    vec_src = df_speciesMetab_cluster.iloc[id_1, :].values
+    vec_dest = df_speciesMetab_cluster.iloc[id_2, :].values
+    nnz_dest = len(np.where(Ri_avg * vec_dest != 0)[0])
+    nnz_common = len(np.where((Ri_avg * vec_dest * vec_src) != 0)[0])
+#     competition_rand[b_] = nnz_common / nnz_dest
+#         competition_rand[b_] = tmp
+    Ri_tmp = Ri_avg.copy()
+    x = vec_src * Ri_tmp.copy()
+    y = vec_dest * Ri_tmp.copy()
+    if metab_rm is not None:
+        Ri_tmp[metab_rm] = 0
+    id_ = np.where(Ri_tmp > 0)[0]
+    x = x[id_]
+    y = y[id_]
+    nnz_dest = len(np.where(y != 0)[0])
+    nnz_common = len(np.where((x * y) != 0)[0])
+    competition_ = nnz_common / nnz_dest
+
+    # competition_ = np.sum(x * y) / \
+    #     (np.sqrt(np.sum(np.power(x, 2))) * \
+    #         np.sqrt(np.sum(np.power(y, 2))))
+    # model = sm.OLS(x, y).fit()
+    # slope_ = model.params[0]
+    # competition_ = np.arctan(np.array([slope_])) / (np.pi / 2)
+    # num_ = x * y * Ri_avg
+    # denom_1 = x * Ri_avg
+    # denom_2 = y * Ri_avg
+    # Ri_avg_log = np.log10(Ri_avg.copy() + 1e-12)
+    # id_ = np.where(Ri_avg > 0)[0]
+    # ri_min = np.min(Ri_avg_log[id_])
+    # Ri_avg_log += (-ri_min) + 1
+    # # competition_ = (2 * np.sum(Ri_avg_log[num_ > 0])) / \
+    # #     (np.sum(Ri_avg_log[denom_1 > 0]) + np.sum(Ri_avg_log[denom_2 > 0]))
+    # competition_ = (2 * (np.sum((x * y * Ri_avg**2)[num_ > 0]))) / \
+    #     ((np.sum((x * Ri_avg)[denom_1 > 0]) * abun_2) + \
+    #      (np.sum((y * Ri_avg)[denom_2 > 0]) * abun_1))
+    # competition_ = np.sum(x >= y) / len(x)
     return competition_
 
 def get_crossfeeding(Ri_avg, df_speciesMetab_cluster, \
