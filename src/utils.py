@@ -1420,7 +1420,32 @@ def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
                         species_num_thresh=5, \
                         n_clusters_hclust=10, distance_metric="euclidean", \
                         method_cluster="ward", normalize_=False):
+    """
+    Perform clustering analysis on species-metabolite consumption matrix, c_{\\alpha, i}.
 
+    Args:
+        df_speciesMetab (pd.DataFrame): DataFrame containing 
+                                        species-metabolite consumption matrix, c_{\\alpha, i}.
+        df_speciesMetab_prod (pd.DataFrame): DataFrame containing species-metabolite 
+                                             production matrix, p_{\\gamma, i}.
+        bin_thresh (float, optional): Threshold for binarizing the species-metabolite consumption matrix. 
+                                      Defaults to 0.3.
+        species_num_thresh (int, optional): Threshold for the minimum number of species required 
+                                            to treat a metabolite as a non-singleton cluster. Defaults to 5.
+        n_clusters_hclust (int, optional): Number of non-singleton clusters to be formed using 
+                                           hierarchical clustering. Defaults to 10.
+        distance_metric (str, optional): Distance metric to be used for clustering. Defaults to "euclidean".
+        method_cluster (str, optional): Linkage method to be used for clustering. Defaults to "ward".
+        normalize_ (bool, optional): Flag indicating whether to normalize the data. Defaults to False.
+
+    Returns:
+        tuple: A tuple containing the following:
+            - df_metabs_clusters (pd.DataFrame): DataFrame containing information about the clusters.
+            - df_speciesMetab_new (pd.DataFrame): DataFrame containing species-metabolite consumption matrix 
+                                                  after clustering.
+            - df_speciesMetab_prod_new (pd.DataFrame): DataFrame containing species-metabolite production 
+                                                       matrix after clustering.
+    """
     df_tmp = df_speciesMetab.copy()
     df_tmp[df_tmp < bin_thresh] = 0
     df_tmp[df_tmp >= bin_thresh] = 1
