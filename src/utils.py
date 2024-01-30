@@ -1383,38 +1383,55 @@ def hierarchical_cluster_metabs(df_speciesMetab, n_clusters, metric="euclidean",
     return cluster_labels_new
 
 def avg_consumption_df(df_speciesMetab, df_speciesMetab_prod, df_metabs_clusters, \
-                       metab_cluster_mean_func="linear"):
-    num_species = df_speciesMetab.shape[0]
-    # df_speciesMetab_tmp = df_speciesMetab.copy()
-    # df_speciesMetab_tmp[df_speciesMetab_tmp == 0] = 1e-6
-    df_speciesMetab_cluster = pd.DataFrame()
-    df_speciesMetab_prod_cluster = pd.DataFrame()
-    for metab_label in range(df_metabs_clusters.shape[0]):
-        id_metabs = df_metabs_clusters.iloc[metab_label, 2]
-        consm_vec = np.zeros((num_species))
-        consm_vec_prod = np.zeros((num_species))
-        
-        if metab_cluster_mean_func == "geometric":
-            for id_ in id_metabs:
-                consm_vec += np.log(1 - df_speciesMetab.iloc[:, id_].values)
-                consm_vec_prod += np.log(1 + df_speciesMetab_prod.iloc[:, id_].values)
-            consm_vec /= len(id_metabs)
-            consm_vec = 1 - np.exp(consm_vec)
-            consm_vec_prod /= len(id_metabs)
-            consm_vec_prod = np.exp(consm_vec_prod) - 1
-            df_speciesMetab_cluster[metab_label] = consm_vec.copy()
-            df_speciesMetab_prod_cluster[metab_label] = consm_vec_prod.copy()
-        elif metab_cluster_mean_func == "linear":
-            for id_ in id_metabs:
-                consm_vec += df_speciesMetab.copy().iloc[:, id_].values
-                consm_vec_prod += df_speciesMetab_prod.copy().iloc[:, id_].values
-            consm_vec /= len(id_metabs)
-            consm_vec_prod /= len(id_metabs)
-            df_speciesMetab_cluster[metab_label] = consm_vec.copy()
-            df_speciesMetab_prod_cluster[metab_label] = consm_vec_prod.copy()
-    df_speciesMetab_cluster.index = df_speciesMetab.index.values
-    df_speciesMetab_prod_cluster.index = df_speciesMetab.index.values
-    return df_speciesMetab_cluster, df_speciesMetab_prod_cluster
+                                             metab_cluster_mean_func="linear"):
+        """
+        Calculate the average consumption of metabolites by species and their production,
+        based on clusters of metabolites.
+
+        Parameters:
+        - df_speciesMetab (pd.DataFrame): DataFrame containing species metabolite data.
+        - df_speciesMetab_prod (pd.DataFrame): DataFrame containing species metabolite production data.
+        - df_metabs_clusters (pd.DataFrame): DataFrame containing metabolite clusters.
+        - metab_cluster_mean_func (str, optional): Method to calculate the mean consumption/production
+            within each metabolite cluster. Can be "geometric" or "linear". Defaults to "linear".
+
+        Returns:
+        - df_speciesMetab_cluster (pd.DataFrame): DataFrame containing the average consumption of
+            metabolites by species, grouped by metabolite clusters.
+        - df_speciesMetab_prod_cluster (pd.DataFrame): DataFrame containing the average production of
+            metabolites by species, grouped by metabolite clusters.
+        """
+        num_species = df_speciesMetab.shape[0]
+        # df_speciesMetab_tmp = df_speciesMetab.copy()
+        # df_speciesMetab_tmp[df_speciesMetab_tmp == 0] = 1e-6
+        df_speciesMetab_cluster = pd.DataFrame()
+        df_speciesMetab_prod_cluster = pd.DataFrame()
+        for metab_label in range(df_metabs_clusters.shape[0]):
+                id_metabs = df_metabs_clusters.iloc[metab_label, 2]
+                consm_vec = np.zeros((num_species))
+                consm_vec_prod = np.zeros((num_species))
+                
+                if metab_cluster_mean_func == "geometric":
+                        for id_ in id_metabs:
+                                consm_vec += np.log(1 - df_speciesMetab.iloc[:, id_].values)
+                                consm_vec_prod += np.log(1 + df_speciesMetab_prod.iloc[:, id_].values)
+                        consm_vec /= len(id_metabs)
+                        consm_vec = 1 - np.exp(consm_vec)
+                        consm_vec_prod /= len(id_metabs)
+                        consm_vec_prod = np.exp(consm_vec_prod) - 1
+                        df_speciesMetab_cluster[metab_label] = consm_vec.copy()
+                        df_speciesMetab_prod_cluster[metab_label] = consm_vec_prod.copy()
+                elif metab_cluster_mean_func == "linear":
+                        for id_ in id_metabs:
+                                consm_vec += df_speciesMetab.copy().iloc[:, id_].values
+                                consm_vec_prod += df_speciesMetab_prod.copy().iloc[:, id_].values
+                        consm_vec /= len(id_metabs)
+                        consm_vec_prod /= len(id_metabs)
+                        df_speciesMetab_cluster[metab_label] = consm_vec.copy()
+                        df_speciesMetab_prod_cluster[metab_label] = consm_vec_prod.copy()
+        df_speciesMetab_cluster.index = df_speciesMetab.index.values
+        df_speciesMetab_prod_cluster.index = df_speciesMetab.index.values
+        return df_speciesMetab_cluster, df_speciesMetab_prod_cluster
 
 def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
                         species_num_thresh=5, \
@@ -1490,7 +1507,8 @@ def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
     # get the new indices for the species-metabolite consumption matrix
     id_new = np.hstack([id_metabs_clust, id_metabs_single_clust])
     
-    # get the clustered species-metabolite consumption and production matrices
+    # redorder the species-metabolite consumption and production matrices based on the new indices
+    # with all metabolites in the non-singleton clusters first, followed by the singleton clusters
     df_speciesMetab_new = df_speciesMetab.copy()
     df_speciesMetab_new = df_speciesMetab_new.iloc[:, id_new]
     df_speciesMetab_prod_new = df_speciesMetab_prod.copy()
