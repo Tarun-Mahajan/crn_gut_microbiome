@@ -1446,15 +1446,25 @@ def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
             - df_speciesMetab_prod_new (pd.DataFrame): DataFrame containing species-metabolite production 
                                                        matrix after clustering.
     """
+    # binarize the species-metabolite consumption matrix
     df_tmp = df_speciesMetab.copy()
     df_tmp[df_tmp < bin_thresh] = 0
     df_tmp[df_tmp >= bin_thresh] = 1
 
+    # get the number of species consuming each metabolite
     sum_ = np.sum(np.array(df_tmp), axis=0)
+
+    # get the indices of metabolites to be part of non-singleton clusters
     id_metabs_clust = np.where(sum_ >= species_num_thresh)[0]
-    id_metabs_rm = np.where(sum_ == 0)[0]
+
+    # get the indices of metabolites to be removed
+    # id_metabs_rm = np.where(sum_ == 0)[0]
+
+    # get the indices of metabolites to be part of singleton clusters
     id_metabs_single_clust = np.where((sum_ < species_num_thresh) & \
                                       (sum_ > 0))[0]
+    
+    # perform hierarchical clustering
     h_cluster = AgglomerativeClustering(n_clusters=n_clusters_hclust, \
                                         metric=distance_metric, \
                                         linkage=method_cluster)
@@ -1468,7 +1478,7 @@ def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
         df_tmp_un = df_tmp_un.transpose()
         df_tmp_ = (df_tmp_un - df_tmp_un.mean())/df_tmp_un.std()
     
-    
+    # get the cluster labels
     cluster_labels = h_cluster.fit_predict(df_tmp_)
     clust_labels_un, clust_counts = np.unique(cluster_labels, return_counts=True)
 
@@ -1477,7 +1487,10 @@ def get_metabs_clusters(df_speciesMetab, df_speciesMetab_prod, bin_thresh=0.3, \
                                               len(clust_labels_un) + \
                                                 len(id_metabs_single_clust))])
     
+    # get the new indices for the species-metabolite consumption matrix
     id_new = np.hstack([id_metabs_clust, id_metabs_single_clust])
+    
+    # get the clustered species-metabolite consumption and production matrices
     df_speciesMetab_new = df_speciesMetab.copy()
     df_speciesMetab_new = df_speciesMetab_new.iloc[:, id_new]
     df_speciesMetab_prod_new = df_speciesMetab_prod.copy()
