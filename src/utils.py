@@ -2281,6 +2281,9 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                             1
                     df_speciesAbun_prev_tmp_[col_] = \
                         df_tmp[col_].values * df_speciesAbun_prev_tmp_[col_].values
+                    df_speciesAbun_prev_tmp_[col_][\
+                        df_speciesAbun_prev_tmp_[col_].values < thresh_zero] = \
+                        thresh_zero
 
                     if id_species_update is None:
                         df_speciesAbun_prev_tmp_[col_] /= \
@@ -2401,13 +2404,13 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                 np.array(df_speciesAbun_mdl.copy().iloc[:, [pass_, \
                                                             pass_ + num_passages, \
                                                             pass_ + 2 * num_passages]])
-            x[x == 0] = thresh_zero
+            x[x <= thresh_zero] = thresh_zero
             # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
             x = x.flatten()
             # y = np.array(df_tmp.copy())[:, :].flatten()
             y = np.array(df_tmp.copy())[:, :]
             y = np.hstack([y, y, y]).flatten()
-            y[y == 0] = thresh_zero
+            y[y <= thresh_zero] = thresh_zero
             if return_sensitivity_ana:
                 species_names = df_speciesAbun_mdl.index.values
                 species_names = np.hstack([species_names, species_names, species_names])
@@ -5451,6 +5454,179 @@ def load_data(thresh_zero=1e-8):
             df_speciesAbun_next, \
             df_speciesAbun_super_agar_next, \
             df_speciesAbun_mucin_next, metab_names, \
+            species_names, df_speciesMetab_prod
+
+def load_data_manuscript(thresh_zero=1e-8, data_dir=None):
+    """
+    Load data for the figures in the manuscript.
+
+    Parameters:
+    - thresh_zero (float): Threshold value for replacing zeros in the strain abundance data. Default is 1e-8.
+    - data_dir (str): Directory path to the data. If None, the default data directory is used.
+
+    Returns:
+    - df_speciesMetab (pandas.DataFrame): Species-metabolite consumption matrix, c_{\\alpha, i}.
+    - df_speciesAbun (pandas.DataFrame): Species abundance matrix, N_{alpha}(end of cycle k).
+    - df_speciesAbun_inoc (pandas.DataFrame): Species abundance matrix for the inoculum, N_{alpha}(inoculum).
+    - df_speciesAbun_ratio (pandas.DataFrame): Species abundance ratio matrix, N_{alpha}(end of cycle k) / N_{alpha}(end of cycle k - 1).
+    - df_speciesAbun_prev (pandas.DataFrame): Species abundance matrix for previous passages N_{alpha}(end of cycle k - 1).
+    - df_speciesAbun_next (pandas.DataFrame): Species abundance matrix for next passages, N_{alpha}(end of cycle k).
+    - metab_names (numpy.ndarray): Array of metabolite names.
+    - species_names (numpy.ndarray): Array of species names.
+    - df_speciesMetab_prod (pandas.DataFrame): Species-metabolite production matrix, p_{\\gamma, i}.
+    """
+    # path to the data
+    if data_dir is None:
+        data_dir = os.path.abspath(os.path.join(os.getcwd(), \
+                                                '..', 'data', 'jin_pollard'))
+    
+    # metab names
+    # metabolite names and indices of the selected metabolites (metabolites used for the 
+    # species-metabolite consumption matrix, c_species^metabolite)
+    # metabolites_list_FC.csv contains the names of the metabolites
+    file_metabNames = os.path.join(data_dir, 
+                                    "metabolites_list_FC.csv")
+    df_metabNames = pd.read_csv(file_metabNames, sep=",", header=0)
+
+    # metabolite_indices.csv contains the indices of the metabolites used in the
+    # species-metabolite consumption matrix, c_species^metabolite for the 63 species and 
+    # 292 metabolites
+    file_metabIds = os.path.join(data_dir, 
+                                    "metabolite_indices.csv")
+    df_metabIds = pd.read_csv(file_metabIds, sep=",", header=None)
+
+    # metabolite names used in the species-metabolite consumption matrix, c_species^metabolite
+    metab_names = df_metabNames.iloc[:, 1].values[df_metabIds.iloc[:, 0].values - 1]
+    unique_, counts_ = np.unique(metab_names, return_counts=True)
+    id_rep = np.where(counts_ > 1)[0] # indices of the repeated metabolites
+    # repeated metabolites are renamed to include the index of the repetition
+    for rep_ in id_rep:
+        id_m = np.where(metab_names == unique_[rep_])[0]
+        for count_, id_ in enumerate(id_m):
+            metab_names[id_] = f'{metab_names[id_]}_{count_}'
+    
+    # species names
+    # species names and indices of the selected species (metabolites used for the 
+    # species abundance matrix, N_alpha)
+    # species_list.csv contains the names of the species
+    file_speciesNames = os.path.join(data_dir, 
+                                    "species_list.csv")
+    df_speciesNames = pd.read_csv(file_speciesNames, sep=",", header=0)
+
+    # species_indices.csv contains the indices of the species used in the
+    # species abundance matrix, N_alpha, and species-metabolite consumption matrix, 
+    # c_species^metabolite for the 63 species and 292 metabolites
+    file_speciesIds = os.path.join(data_dir, 
+                                    "species_indices.csv")
+    df_speciesIds = pd.read_csv(file_speciesIds, sep=",", header=None)
+    # species names used in the species abundance matrix, N_alpha, and species-metabolite
+    # consumption matrix, c_species^metabolite
+    species_names = \
+        df_speciesNames.iloc[:, 0].values[df_speciesIds.iloc[:, 0].values - 1]
+    
+    # species_metabolite_consumption_matrix.csv contains the species-metabolite consumption
+    # matrix, c_species^metabolite for the 63 species and 292 metabolites
+    file_speciesMetab = os.path.join(data_dir, 
+                                    "species_metabolite_consumption_matrix.csv")
+    thresh_zero_metab = 0
+    df_speciesMetab = pd.read_csv(file_speciesMetab, sep=",", header=None)
+    df_speciesMetab[df_speciesMetab == 0] = thresh_zero_metab
+    num_species, num_metabs = df_speciesMetab.shape
+    df_speciesMetab.columns = metab_names
+    df_speciesMetab.index = species_names
+
+    # species_metabolite_production_matrix.csv contains the species-metabolite production
+    # matrix, c_species^metabolite for the 63 species and 292 metabolites
+    file_speciesMetab = os.path.join(data_dir, 
+                                    "species_metabolite_production_matrix.csv")
+    thresh_zero_metab = 0
+    df_speciesMetab_prod = pd.read_csv(file_speciesMetab, sep=",", header=None)
+    df_speciesMetab_prod[df_speciesMetab_prod == 0] = thresh_zero_metab
+    # num_species, num_metabs = df_speciesMetab_prod.shape
+    df_speciesMetab_prod.columns = metab_names
+    df_speciesMetab_prod.index = species_names
+
+    # species abundance matrix for the liquid-media only control from Jin et al. 2023
+    # species abundances for all 6 passages and 3 bioreplicates
+    num_passages = 6
+    num_bioRep = 3
+    file_speciesAbun = os.path.join(data_dir, 
+                                    "species_abundances.csv")
+    df_speciesAbun = pd.read_csv(file_speciesAbun, sep=",", header=None)
+    df_speciesAbun.columns = create_abundance_header_new(num_bioRep=num_bioRep, num_passages=num_passages)
+    df_speciesAbun_raw = df_speciesAbun.copy()
+    # thresh_zero = 1e-8
+    df_speciesAbun[df_speciesAbun == 0] = thresh_zero
+    df_speciesAbun.index = species_names
+    df_speciesAbun_T = df_speciesAbun.copy()
+    df_speciesAbun_T = df_speciesAbun_T.transpose()
+
+    # species abundance matrix for the inoculum
+    file_speciesAbun = os.path.join(data_dir, 
+                                    "species_abundances_inoculum.csv")
+    df_speciesAbun_inoc = pd.read_csv(file_speciesAbun, sep=",", header=None)
+    df_speciesAbun_inoc.columns = ["inoculum"]
+    df_speciesAbun_inoc[df_speciesAbun_inoc == 0] = thresh_zero
+    df_speciesAbun_inoc.index = species_names
+
+    # species abundance matrix for previous abundances, next abundances and ratio
+    # for the liquid-media only control from Jin et al. 2023
+    passages_ = np.array(['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])
+    reps_ = np.array(['r0', 'r1', 'r2'])
+    df_speciesAbun_ratio = pd.DataFrame()
+    df_speciesAbun_ratio_corr = pd.DataFrame()
+    df_speciesAbun_new = pd.DataFrame()
+    df_speciesAbun_prev = pd.DataFrame()
+    df_speciesAbun_next = pd.DataFrame()
+    df_speciesAbun_split = pd.DataFrame()
+    count_ = 0
+    brep_vec = list(range(num_bioRep))
+    for rep_ in reps_:
+        for pass_ in range(1, len(passages_)):
+            col_1 = passages_[pass_ - 1] + "_" + rep_
+            col_2 = passages_[pass_] + "_" + rep_
+            
+            df_speciesAbun_prev[col_2] = df_speciesAbun[col_1].values
+            df_speciesAbun_next[col_2] = df_speciesAbun[col_2].values
+            
+            array_1 = np.array(df_speciesAbun[col_2].values / df_speciesAbun[col_1].values)
+            array_2 = np.array(df_speciesAbun[col_2].values)
+            array_3 = np.array(df_speciesAbun[col_1].values)
+            
+            df_speciesAbun_new[col_1] = df_speciesAbun[col_1].values
+            df_speciesAbun_new[col_2] = df_speciesAbun[col_2].values
+            df_speciesAbun_ratio[col_2] = array_1.copy()
+            df_speciesAbun_ratio_corr[col_2] = array_1.copy()
+            id_ = np.where((array_3 == thresh_zero) & (array_2 == thresh_zero))[0]
+    #         id_ = np.where((array_2 == thresh_zero))[0]
+    #         id_ = np.where(array_1 == 1)[0]
+            
+            if len(id_) > 0:
+                df_speciesAbun_ratio.iloc[id_, count_] = -1
+                rep_alt = list(set(reps_) - set([rep_]))
+                ratio_vec = []
+                for id_tmp in id_:
+                    abun_alt_ratio = []
+                    for rep__ in rep_alt:
+                        col_1_ = passages_[pass_ - 1] + "_" + rep__
+                        col_2_ = passages_[pass_] + "_" + rep__
+                        val_1 = df_speciesAbun[col_1_].values[id_tmp]
+                        val_2 = df_speciesAbun[col_2_].values[id_tmp]
+                        if (val_1 != thresh_zero) | (val_2 != thresh_zero):
+                            abun_alt_ratio.append(val_2 / val_1)
+                    if len(abun_alt_ratio) != 0:
+                        df_speciesAbun_ratio_corr.iloc[id_tmp, count_] = \
+                            np.exp(np.mean(np.log10(np.array(abun_alt_ratio))))
+                    else:
+                        df_speciesAbun_ratio_corr.iloc[id_tmp, count_] = -1
+                    
+            count_ += 1
+
+    return df_speciesMetab, df_speciesAbun, \
+            df_speciesAbun_inoc, \
+            df_speciesAbun_ratio, \
+            df_speciesAbun_prev, \
+            df_speciesAbun_next, metab_names, \
             species_names, df_speciesMetab_prod
 
 def get_prod_term(df_speciesMetab_prod, df_speciesAbun_split, B_alone, \
