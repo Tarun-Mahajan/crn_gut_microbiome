@@ -8,7 +8,7 @@ import os
 import pandas as pd
 import pickle
 # import random
-from scipy.optimize import nnls
+from scipy.optimize import nnls, minimize, lsq_linear
 # from scipy.optimize import curve_fit
 # from scipy.optimize import minimize
 import scipy
@@ -577,8 +577,7 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
                df_speciesMetab_prod=None, prod_use_prev=True, \
                use_dilution_term=False, dilution_factor=15000, \
                use_avg_for_prod=True, check_ratio_dir=True, mode_Ri=True, Ri=None, \
-               power_=1.0):
-    
+               power_=1.0, bounds=None, method_opt="nnls"):    
     df_speciesAbun_prev_tmp = df_speciesAbun_prev.copy()
     df_speciesAbun_next_tmp = df_speciesAbun_next.copy()
     df_speciesAbun_ratio_tmp = df_speciesAbun_ratio.copy()
@@ -694,7 +693,12 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
     # print(np.min(A_train.flatten()))
 
     if method == "linear":
-        coeff_train_ = nnls(A_train, b_train.flatten())[0]
+        if bounds is None:
+            bounds = (0, np.inf)
+        if method_opt == "nnls":
+            coeff_train_ = nnls(A_train, b_train.flatten())[0]
+        else:
+            coeff_train_ = lsq_linear(A_train, b_train.flatten(), bounds=bounds).x
     else:
         regr = \
             ElasticNet(random_state=0, alpha=alpha, l1_ratio=1, \
@@ -4811,7 +4815,48 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                   df_speciesMetab_prod=None, prod_use_prev=True, \
                   use_dilution_term=False, dilution_factor=15000, \
                   use_avg_for_prod=True, check_ratio_dir=True, \
-                  return_raw_data=False, mode_Ri=True, Ri=None, power_=1.0):
+                  return_raw_data=False, mode_Ri=True, Ri=None, power_=1.0, \
+                  bounds=None, method_opt="nnls"):
+    """
+    Fits the dynamic Ri values for the given data.
+
+    Parameters:
+    - df_speciesMetab_cluster (DataFrame): The clustered species-metabolite consumption matrix $c_{\alpha\, i}$.
+    - df_speciesAbun_prev_mdl (DataFrame): The species abundances at the current passage, goes 
+                                           from passage 1 to passage 5.
+    - df_speciesAbun_next_mdl (DataFrame): The species abundances at the next passage, goes 
+                                           from passage 2 to passage 6.
+    - df_speciesAbun_ratio_mdl (DataFrame): Ratio of current and next species abundances.
+    - p_vec_new (list): List of values for p (1 - time fraction).
+    - file_save (str): File path to save the results.
+    - num_passages (int): Number of passage transitions.
+    - pass_rm (list): List of passage transitions to remove.
+    - save_data (bool): Whether to save the data or not.
+    - verbose (bool): Whether to print verbose output or not.
+    - method (str): Method for computing Ri values.
+    - alpha (float): Alpha value for computing Ri values.
+    - use_loo (bool): Whether to use leave-one-out cross-validation or not.
+    - df_speciesAbun_ratio_nonoise (DataFrame): Non-noisy species abundance ratio matrix.
+    - num_brep (int): Number of replicates.
+    - metabs_cluster_id (list): List of metabolite cluster IDs.
+    - get_prod (bool): Whether to compute production rates or not.
+    - B_alone (float): B value for computing production rates.
+    - df_speciesMetab_prod (DataFrame): Species-metabolite production matrix.
+    - prod_use_prev (bool): Whether to use previous model's production rates or not.
+    - use_dilution_term (bool): Whether to use dilution term or not.
+    - dilution_factor (float): Dilution factor.
+    - use_avg_for_prod (bool): Whether to use average for production rates or not.
+    - check_ratio_dir (bool): Whether to check ratio direction or not.
+    - return_raw_data (bool): Whether to return raw data or not.
+    - mode_Ri (bool): Mode for computing Ri values.
+    - Ri (float): Ri value.
+    - power_ (float): Power value for computing Ri values.
+
+    Returns:
+    - save_obj (dict): Dictionary containing the fitted Ri values.
+    - A_train_joint (dict): Dictionary containing the joint training data.
+    - b_train_joint (dict): Dictionary containing the joint training labels.
+    """
     num_species = df_speciesMetab_cluster.shape[0]
     df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
     num_metabs = df_speciesMetab_tmp.shape[1]
@@ -4855,7 +4900,7 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                         dilution_factor=dilution_factor, \
                         use_avg_for_prod=use_avg_for_prod, \
                         check_ratio_dir=check_ratio_dir, mode_Ri=mode_Ri, Ri=Ri, \
-                        power_=power_)
+                        power_=power_, bounds=bounds, method_opt=method_opt)
 
         if use_loo:
             if mode_Ri:
@@ -4889,7 +4934,7 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
                             use_dilution_term=use_dilution_term, \
                             dilution_factor=dilution_factor, \
                             check_ratio_dir=check_ratio_dir, mode_Ri=mode_Ri, Ri=Ri, \
-                            power_=power_)
+                            power_=power_, bounds=bounds, method_opt=method_opt)
                 if np.sum(Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]) <= 1.5:
                     Ri_noMicrocosm_dynamicAll_fit_avg[count_p] += \
                         Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]
