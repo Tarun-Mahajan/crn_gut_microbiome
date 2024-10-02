@@ -50,6 +50,30 @@ def iterate_growth_ratio(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_ne
                                               sample_names=list(df_speciesAbun_split.columns.values))
     return sample_names_split, mat_cons_abun_split_list
 
+def iterate_growth_ratio_logRatio(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, p_, \
+                                    df_speciesAbun_ratio=None, power_=1.0, D_=15000):
+    if df_speciesAbun_ratio is None:
+        df_speciesAbun_split = \
+            geometric_avg(df_speciesAbun_prev, df_speciesAbun_next, p=p_)
+    else:
+        # df_speciesAbun_split = df_speciesAbun_ratio.copy()**(1 - p_) * \
+        #     df_speciesAbun_prev.copy()
+        df_speciesAbun_split = \
+            geometric_avg(df_speciesAbun_prev, df_speciesAbun_next, p=p_)
+        
+    df_speciesAbun_ratio_ln = np.log(df_speciesAbun_next) - np.log(df_speciesAbun_prev) + \
+        np.log(D_)
+    df_speciesAbun_split = df_speciesAbun_split / df_speciesAbun_ratio_ln
+    df_cons_abun_prod_split = compute_cons_abun_prod(df_speciesMetab=df_speciesMetab, \
+                                                     df_speciesAbun=df_speciesAbun_split, \
+                                                     power_=power_)
+    sample_names_split, mat_cons_abun_split_list = \
+        compute_species_metab_matrix_for_nnls(df_cons_abun_prod=df_cons_abun_prod_split, 
+                                              df_speciesMetab=df_speciesMetab, 
+                                              num_passages=6, num_bioRep=3, 
+                                              sample_names=list(df_speciesAbun_split.columns.values))
+    return sample_names_split, mat_cons_abun_split_list
+
 def iterate_growth_ratio_2_0(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, p_, \
                          df_speciesAbun_ratio=None, power_=1.0, D_=15000):
     # if df_speciesAbun_ratio is None:
@@ -629,6 +653,7 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
             tmp[id_not_keep] = 1
             tmp = np.array(tmp**(-p_tmp_new)).reshape((len(id_species), 1))
             tmp_ratio = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
+            tmp_ratio[id_not_keep] = 1
             tmp_find = tmp1.copy()
             tmp_ratio = tmp_ratio**(p_tmp_new)
             
@@ -667,6 +692,152 @@ def compute_Ri(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
 
             if use_dilution_term:
                 b_val -= tmp_dil[id_keep].flatten()
+
+            if not mode_Ri:
+                intercept_ = A_train_sample.copy() @ Ri
+                b_val -= intercept_.flatten()
+                mat_new = get_matrix_form_prod(np.array(df_speciesMetab_prod), \
+                                               np.array(A_train_sample), Ri, \
+                                               np.array(df_tmp.iloc[:, sample_id]))
+                A_train_sample = mat_new.copy()
+
+            if count_ == 0:
+                # if use_dilution_term:
+                #     A_train_sample = np.hstack((A_train_sample, tmp_dil[id_keep, :]))
+                A_train = A_train_sample
+                # b_train = tmp_ratio[id_keep].flatten()
+                b_train = b_val.flatten()
+                count_ += 1
+            else:
+                # if use_dilution_term:
+                #     A_train_sample = np.hstack((A_train_sample, tmp_dil[id_keep, :]))
+                A_train = np.vstack((A_train, A_train_sample))
+                # b_train = np.hstack((b_train, tmp_ratio[id_keep]))
+                b_train = np.hstack((b_train, b_val.flatten()))
+    # b_train = np.ones((A_train.shape[0]))
+    # print(np.min(A_train.flatten()))
+
+    if method == "linear":
+        if bounds is None:
+            bounds = (0, np.inf)
+        if method_opt == "nnls":
+            coeff_train_ = nnls(A_train, b_train.flatten())[0]
+        else:
+            coeff_train_ = lsq_linear(A_train, b_train.flatten(), bounds=bounds).x
+    else:
+        regr = \
+            ElasticNet(random_state=0, alpha=alpha, l1_ratio=1, \
+                       fit_intercept=False, positive=True)
+        regr.fit(A_train, b_train.flatten())
+        coeff_train_ = regr.coef_
+    # coeff_train_ = nnls(np.log10(A_train), np.log10(b_train.flatten()))[0]
+    return coeff_train_, A_train, b_train
+
+def compute_Ri_logRatio(df_speciesMetab, df_speciesAbun_prev, df_speciesAbun_next, \
+                        df_speciesAbun_ratio, \
+                        p_tmp, num_passages, id_species, method="linear", alpha=0, \
+                        df_speciesAbun_ratio_nonoise=None, \
+                        metabs_cluster_id=None, get_prod=False, B_alone=None, \
+                        df_speciesMetab_prod=None, prod_use_prev=True, \
+                        use_dilution_term=False, dilution_factor=15000, \
+                        use_avg_for_prod=True, check_ratio_dir=True, mode_Ri=True, Ri=None, \
+                        power_=1.0, bounds=None, method_opt="nnls"):    
+    df_speciesAbun_prev_tmp = df_speciesAbun_prev.copy()
+    df_speciesAbun_next_tmp = df_speciesAbun_next.copy()
+    df_speciesAbun_ratio_tmp = df_speciesAbun_ratio.copy()
+    if df_speciesAbun_ratio_nonoise is not None:
+        df_speciesAbun_ratio_new = df_speciesAbun_ratio_nonoise.copy()
+    else:
+        df_speciesAbun_ratio_new = df_speciesAbun_ratio.copy()
+    num_species_tmp = df_speciesAbun_prev.shape[0]
+
+    df_speciesAbun_split = \
+        geometric_avg(df_speciesAbun_prev_tmp, df_speciesAbun_next_tmp, p=p_tmp)
+    if prod_use_prev:
+        df_split = df_speciesAbun_prev_tmp.copy()
+    else:
+        df_split = geometric_avg(df_speciesAbun_prev_tmp.copy(), \
+                                 df_speciesAbun_next_tmp.copy(), p=p_tmp)
+    if use_avg_for_prod:
+        df_tmp = df_split.copy()
+    else:
+        df_tmp = df_speciesAbun_next_tmp.copy()
+    prod_metabs_cond = \
+        get_prod_term(df_speciesMetab_prod, df_tmp.copy(), B_alone, \
+                      get_prod=get_prod)
+
+    sample_names_split = list(df_speciesAbun_prev_tmp.columns.values)
+    count_ = 0 
+    for sample_ in sample_names_split:
+        # pass_ = int(sample_.split("_")[0][1])
+        pass_ = 2
+        
+        p_tmp_new = p_tmp
+        
+        _, mat_cons_abun_split_list_tmp = \
+            iterate_growth_ratio_logRatio(df_speciesMetab.copy(), df_speciesAbun_prev_tmp.copy(), \
+                                            df_speciesAbun_next_tmp.copy(), p_=p_tmp_new, \
+                                            df_speciesAbun_ratio=df_speciesAbun_ratio_tmp, power_=power_, \
+                                            D_=dilution_factor)
+        if pass_ > -1:
+            brep_ = int(sample_.split("_")[1][1])
+            A_train_sample = mat_cons_abun_split_list_tmp[sample_][id_species, :] * \
+                prod_metabs_cond[sample_][id_species, :]
+            if metabs_cluster_id is not None:
+                A_train_sample = \
+                    weighted_avg_consumption(A_train_sample, metabs_cluster_id)
+            sample_id = sample_names_split.index(sample_)
+            tmp = np.array(df_speciesAbun_ratio_tmp.iloc[id_species, sample_id])
+            tmp1 = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
+            tmp_logRatio = np.log(dilution_factor) + \
+                np.log(np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id]))
+            id_keep = np.where(tmp1 > 0)[0]
+            id_not_keep = np.where(tmp1 < 0)[0]
+            tmp[id_not_keep] = 1
+            tmp_logRatio[id_not_keep] = 1
+            tmp = np.array(tmp**(-p_tmp_new)).reshape((len(id_species), 1))
+            tmp_ratio = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
+            tmp_ratio[id_not_keep] = 1
+            tmp_find = tmp1.copy()
+            tmp_ratio = tmp_ratio**(p_tmp_new)
+            
+#             tmp = np.array(tmp).reshape((len(train_strain_id), 1))
+#             tmp = tmp[id_keep, :]
+            tmp = np.matmul(tmp, np.ones((1, A_train_sample.shape[1])))
+
+            if check_ratio_dir:
+                id_increase = np.where(tmp_find >= 1)[0]
+                id_decrease = np.where(tmp_find < 1)[0]
+            else:
+                id_increase = np.where(tmp_find > 0)[0]
+                id_decrease = np.where(tmp_find < 0)[0]
+            A_train_sample[id_decrease, :] = \
+                np.multiply(A_train_sample[id_decrease, :], \
+                            tmp[id_decrease, :])
+            if use_dilution_term:
+                tmp_dil = \
+                    np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id]).flatten()
+                tmp_dil[id_decrease] = tmp_dil[id_decrease]**(-1)
+                tmp_dil[id_increase] = \
+                    tmp_dil[id_increase]**(p_tmp_new-1)
+                # tmp_dil = tmp_dil.reshape((-1, 1))
+                tmp_dil /= dilution_factor
+            # A_train_sample[id_increase, :] = \
+            #     np.multiply(A_train_sample[id_increase, :], \
+            #                 tmp[id_increase, :])
+            A_train_sample = A_train_sample[id_keep, :]
+
+            b_val = np.ones((len(id_species)))
+            # b_val[id_increase] = tmp_ratio[id_increase]
+            # b_val = tmp_ratio
+            b_val[id_increase] = tmp_ratio[id_increase]
+            # b_val[id_decrease] = tmp_ratio[id_decrease] / tmp[id_decrease, 0].flatten()
+            b_val = b_val[id_keep]
+
+            if use_dilution_term:
+                b_val -= tmp_dil[id_keep].flatten()
+
+            b_val *= tmp_logRatio[id_keep]
 
             if not mode_Ri:
                 intercept_ = A_train_sample.copy() @ Ri
@@ -1015,6 +1186,99 @@ def compute_growth_ratio_iterate_blind(df_speciesAbun_prev, df_speciesAbun_next,
         vals_tmp = np.multiply((np.matmul(A_train_sample, Ri).flatten())[id_keep], \
                                tmp.flatten()**(1 - p_tmp))
         vals_[id_keep] = vals_tmp.copy()
+        if use_dilution:
+            vals_[id_keep] += 1 / dilution_factor
+        else:
+            vals_[vals_ == 0] = 1 / dilution_factor
+#         vals_ = df_speciesAbun_ratio_tmp_[sample_].values
+#         vals_[sample_] = (np.matmul(A_train_sample, Ri).flatten())**(1 / p_tmp)
+
+        if norm_:
+#             mean_ = 10 ** np.mean(np.log10(vals_[id_keep]))
+#             ratio_fac = 10 ** (ratio_means_[sample_] - np.mean(np.log10(vals_[id_keep])))
+#             vals_[id_keep] = np.power(10, (np.log10(vals_[id_keep]) * ratio_means_[sample_] / \
+#                                     np.mean(np.log10(vals_[id_keep]))))
+#     #         vals_ += 1 - np.sum(vals_ * df_speciesAbun_prev[sample_].values)
+            vals_next = vals_.copy() * df_speciesAbun_prev[sample_].values
+            ratio_fac = 1 / np.sum(vals_next)
+            df_growth_ratio[sample_] = vals_ * ratio_fac
+    
+            # ratio_fac = ratio_means_[sample_] / np.sum(np.log10(vals_[id_keep]))
+            # vals_ = 10**(np.log10(vals_) * ratio_fac)
+            # df_growth_ratio[sample_] = vals_
+        else:
+#             vals_next = vals_ * df_speciesAbun_prev[sample_].values
+#             ratio_fac = 1 / np.sum(vals_next)
+            df_growth_ratio[sample_] = vals_
+#         df_growth_ratio[sample_] = 10 ** (np.log10(vals_) * ratio_means_[sample_] / \
+#                                           np.mean(np.log10(vals_)))
+#         df_growth_ratio[sample_] = 10 ** (np.log10(vals_) + ratio_means_[sample_] - \
+#                                           np.mean(np.log10(vals_)))
+    
+#     growth_ratios_new = np.zeros(())
+    
+    return df_growth_ratio
+
+def compute_growth_ratio_iterate_blind_logRatio(df_speciesAbun_prev, df_speciesAbun_next, \
+                                                p_tmp, Ri, growth_ratios_, \
+                                                ratio_means_, \
+                                                df_speciesMetab, norm_=True, \
+                                                metabs_cluster_id=None, \
+                                                get_prod=False, B_alone=None, \
+                                                df_speciesMetab_prod=None, \
+                                                prod_use_prev=True, \
+                                                use_dilution=False, \
+                                                dilution_factor=15000, \
+                                                use_avg_for_prod=True):
+    df_speciesAbun_ratio_new = df_speciesAbun_prev.copy()
+    for col_ in range(df_speciesAbun_prev.shape[1]):
+        df_speciesAbun_ratio_new.iloc[:, col_] = growth_ratios_.iloc[:, col_].values
+        df_speciesAbun_next.iloc[:, col_] = (growth_ratios_.iloc[:, col_].values) * \
+            df_speciesAbun_prev.iloc[:, col_].values
+    sample_names_split, mat_cons_abun_split_list_tmp = \
+        iterate_growth_ratio_logRatio(df_speciesMetab.copy(), df_speciesAbun_prev.copy(), \
+                             df_speciesAbun_next.copy(), p_=p_tmp, D_=dilution_factor)
+    if prod_use_prev:
+        df_split = df_speciesAbun_prev.copy()
+    else:
+        df_split = geometric_avg(df_speciesAbun_prev.copy(), \
+                                 df_speciesAbun_next.copy(), p=p_tmp)
+    if use_avg_for_prod:
+        df_tmp = df_split.copy()
+    else:
+        df_tmp = df_speciesAbun_next.copy()
+    prod_metabs_cond = \
+        get_prod_term(df_speciesMetab_prod, df_tmp.copy(), B_alone, \
+                      get_prod=get_prod)
+
+    id_species = range(df_speciesAbun_prev.shape[0])
+    count_ = 0
+    df_growth_ratio = pd.DataFrame()
+#     ratio_fac = 0
+#     vals_ = {}
+    for sample_ in sample_names_split:
+#         pass_ = int(sample_.split("_")[0][1])
+#         brep_ = int(sample_.split("_")[1][1])
+        A_train_sample = mat_cons_abun_split_list_tmp[sample_][id_species, :]
+        if metabs_cluster_id is not None:
+            A_train_sample = \
+                weighted_avg_consumption(A_train_sample, metabs_cluster_id)
+        A_train_sample = A_train_sample * prod_metabs_cond[sample_][id_species, :]
+        sample_id = sample_names_split.index(sample_)
+        tmp = np.array(df_speciesAbun_ratio_new.iloc[id_species, sample_id])
+        tmp_logRatio = np.log(dilution_factor) + np.log(tmp.copy())
+        id_notkeep = np.where((df_speciesAbun_prev[sample_].values == 1e-8) & \
+                              (df_speciesAbun_next[sample_].values == 1e-8))[0]
+        id_keep = list(set(id_species) - set(id_notkeep))
+#         tmp = df_speciesAbun_ratio_tmp_[sample_].values
+        tmp = np.array(tmp).reshape((len(id_species), 1))
+        tmp = tmp[id_keep, :]
+        tmp_logRatio = np.array(tmp_logRatio).reshape((len(id_species), 1))
+        tmp_logRatio = tmp_logRatio[id_keep, :]
+        vals_ = np.ones((len(id_species)))
+        vals_tmp = np.multiply((np.matmul(A_train_sample, Ri).flatten())[id_keep], \
+                               tmp.flatten()**(1 - p_tmp))
+        vals_[id_keep] = vals_tmp.copy() / tmp_logRatio.flatten()
         if use_dilution:
             vals_[id_keep] += 1 / dilution_factor
         else:
@@ -2270,7 +2534,7 @@ def blindly_pred_abun_growth_no_f(p_vec_new, df_speciesMetab_cluster, \
     #     fig.figure.savefig(file_save, dpi=300, transparent=False, facecolor="white")
     #     plt.close(fig.figure)
 
-def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
+def blindly_pred_abun_growth_matched(p_vec_new, df_speciesMetab_cluster, \
                              df_speciesAbun_inoc, df_speciesAbun_mdl, \
                              df_speciesAbun_prev_mdl, \
                              df_speciesAbun_ratio_mdl, \
@@ -2289,7 +2553,7 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                              dilution_factor=15000, \
                              id_species_update=None, \
                              use_avg_for_prod=True, \
-                             Ri_0=None):
+                             Ri_0=None, n_breps=3):
     if Ri_0 is None:
         Ri_0 = Ri_.copy()
     num_species = df_speciesMetab_cluster.shape[0]
@@ -2301,7 +2565,7 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                  set(list(id_species_update))), dtype='long')
     # simulate inoculum abundances and initial growth ratios
     sample_names = df_speciesAbun_mdl.columns.values
-    n_breps = 3
+    # n_breps = 3
     samples_first = sample_names[0 + np.arange(n_breps) * num_passages]
     # ratio_init = np.zeros((num_species))
     # num_rand = 100
@@ -2470,20 +2734,27 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                 # print(np.sum(df_tmp[col_].values))
 
             b_ = range(3)
+            id_pass_rep = []
+            for r_ in range(n_breps):
+                id_pass_rep += [pass_ + num_passages * r_]
             x = \
-                np.array(df_speciesAbun_mdl.copy().iloc[:, [pass_, \
-                                                            pass_ + num_passages, \
-                                                            pass_ + 2 * num_passages]])
+                np.array(df_speciesAbun_mdl.copy().iloc[:, id_pass_rep])
             x[x <= thresh_zero] = thresh_zero
             # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
             x = x.flatten()
             # y = np.array(df_tmp.copy())[:, :].flatten()
             y = np.array(df_tmp.copy())[:, :]
-            y = np.hstack([y, y, y]).flatten()
+            y_stack = y.copy()
+            y = y_stack.flatten()
             y[y <= thresh_zero] = thresh_zero
             if return_sensitivity_ana:
                 species_names = df_speciesAbun_mdl.index.values
-                species_names = np.hstack([species_names, species_names, species_names])
+                species_names_stack = species_names.copy()
+                if n_breps > 1:
+                    for rep_ in range(1, n_breps):
+                        species_names_stack = np.hstack([species_names, species_names_stack])
+                species_names = species_names_stack.copy()
+                # species_names = np.hstack([species_names, species_names, species_names])
                 save_obj_return[pass_] = \
                     {'growth_ratio_all' : growth_rate_all[num_iter - 1], \
                      'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
@@ -2631,11 +2902,617 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
             # Plot growth ratios
             if pass_ > 0:
                 pass_tmp = pass_ - 1
+                id_pass_rep = []
+                for r_ in range(n_breps):
+                    id_pass_rep += [pass_tmp + (num_passages - 1) * r_]
                 df_speciesAbun_ratio_tmp_1 = \
-                    df_speciesAbun_ratio_mdl.iloc[:, [pass_tmp, pass_tmp + 5, \
-                                                             pass_tmp + 10]].copy()
-                abun_prev = df_speciesAbun_prev_mdl.iloc[:, [pass_tmp, pass_tmp + 5, \
-                                                             pass_tmp + 10]].copy()
+                    df_speciesAbun_ratio_mdl.iloc[:, id_pass_rep].copy()
+                abun_prev = df_speciesAbun_prev_mdl.iloc[:, id_pass_rep].copy()
+                abun_prev = np.array(abun_prev)
+                abun_prev[abun_prev == 0] = thresh_zero
+                abun_prev = 10**np.mean(np.log10(abun_prev), axis=1)
+                x = \
+                    np.array(df_speciesAbun_ratio_tmp_1)
+                x_new = -1 * np.ones(x.shape[0])
+                y = -1 * np.ones(x.shape[0])
+                for row_ in range(x.shape[0]):
+                    id_tmp = np.where(x[row_, :] > 0)[0]
+                    if len(id_tmp) > 0:
+                        x_new[row_] = 10**np.mean(np.log10(x[row_, id_tmp]))
+                        y[row_] = 10**np.mean(np.log10(growth_rate_all[num_iter - 1].copy().iloc[row_, id_tmp]))
+                id_tmp = np.where(x_new > 0)[0]
+                x = x_new[id_tmp]
+                abun_prev = abun_prev.flatten()[id_tmp]
+    #                 x = 10**(np.mean(np.log10(x), axis=1)).flatten()
+                # y = np.array(growth_rate_all[num_iter - 1].copy())[:, :].flatten()
+                y = y[id_tmp]
+            else:
+                id_pass_rep = []
+                for r_ in range(n_breps):
+                    id_pass_rep += [pass_ + (num_passages) * r_]
+                x = np.array(df_speciesAbun_mdl.iloc[:, id_pass_rep].copy())
+                x[x == 0] = thresh_zero
+                # x = 10**np.mean(np.log10(x), axis=1).flatten()
+                x_inoc_tmp = np.array(df_speciesAbun_inoc.copy())
+                x_inoc_tmp[x_inoc_tmp == 0] = thresh_zero
+                x /= x_inoc_tmp
+                y = np.array(growth_rate_all[num_iter - 1].copy())[:, :]
+                abun_prev = x_inoc_tmp
+
+            y[y == 0] = 1e-8
+            x[x == 0] = 1e-8
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names = np.hstack([species_names, species_names, species_names])
+                if pass_ > 0:
+                    save_obj_return[pass_]['growth_ratio_obs'] = \
+                        np.array(df_speciesAbun_ratio_tmp_1.copy())
+                else:
+                    x_stack = x.copy()
+                    # if n_breps > 1:
+                    #     for rep_ in range(1, n_breps):
+                    #         x_stack = np.hstack([x, x_stack])
+                    save_obj_return[pass_]['growth_ratio_obs'] = x_stack.copy()
+            id_ = np.where((x > 0) & (y > 0))[0]
+            x = np.log10(x[id_])
+            y = np.log10(y[id_])
+            # y=np.random.permutation(x)
+            y[y <= -4] = -4
+            x[x <= -4] = -4
+            # df_plt = pd.DataFrame(data={"x" : x, "y" : y, \
+            #                             "abun_prev" : abun_prev[id_]})
+            prev_ord = np.argsort(abun_prev)
+            prev_ord_tmp = [0.2*n**2 for n in prev_ord]
+            abs_mean_error = np.sqrt(np.mean(np.power(y - x, 2)))
+            if return_sensitivity_ana:
+                RMSE_obj[pass_]["growth_ratio"] = abs_mean_error
+
+            if plot_:
+                fig, axes = plt.subplots(1, 1, figsize=(16, 18), sharey="row", sharex="col")
+                fig.supylabel('predicted growth ratio (log scale)', fontsize=25)
+                fig.supxlabel('observed growth ratio (log scale)', fontsize=25)
+                # plt_ = sns.scatterplot(data=df_plt, x="x", \
+                #                        y="y", s=prev_ord_tmp, ax=axes)
+                plt_ = sns.scatterplot(data=df_plt, x="x", \
+                                    y="y", s=100, ax=axes)
+
+                plt_ = sns.kdeplot(x=x, y=y, fill=True, alpha=0.6, cmap="Reds", \
+                                ax=axes)
+                plt_.plot([-4, 2], [-4, 2], c="red", linewidth=3)
+
+                corr_val_pe = scipy.stats.pearsonr(10**x, 10**y)
+                corr_val_pe_log = scipy.stats.pearsonr(x, y)
+                corr_val_sp = scipy.stats.spearmanr(x, y)
+                std_error = np.sqrt(np.std(np.power(y - x, 2)))
+                id_notzero_zero = np.where((x > -5) & (y <= -5))[0]
+
+                frac_zero = len(id_notzero_zero) / len(x)
+
+                model = sm.OLS(10**y, 10**x).fit()
+                slope = model.params[0]
+                slope_pval = model.pvalues[0]
+                
+                model_log = sm.OLS(y, x).fit()
+                slope_log = model_log.params[0]
+                slope_log_pval = model_log.pvalues[0]
+
+                # df_tmp = \
+                #     pd.DataFrame(data={"p" : [p_tmp] * 8, 
+                #                     "metric_type" : ["corr_pearson_log", 
+                #                                         "corr_spearman", "slope", "slope_log", \
+                #                                         "corr_pearson_linear", \
+                #                                         "RMSE", \
+                #                                         "std_error", "FNR"], 
+                #                     "metric" : [corr_val_pe_log[0], 
+                #                                 corr_val_sp[0], slope, slope_log, \
+                #                                 corr_val_pe[0], abs_mean_error, \
+                #                                 std_error, \
+                #                                 frac_zero],
+                #                     "pval" : [corr_val_pe_log[1], 
+                #                                 corr_val_sp[1], slope_pval, slope_log_pval, \
+                #                                 corr_val_pe[1], 0, 0, 0]})
+                # df_corr_slope_growth = \
+                #     pd.concat([df_corr_slope_growth, df_tmp], ignore_index=True)
+
+
+                # plt_.plot([-4, 2], [np.log10(slope * (1e-4)), np.log10(slope * 1e2)], c="green")
+                plt_.plot([-4, 2], [(slope_log * (-4)), (slope_log * 2)], c="green", \
+                        linewidth=3)
+                plt_.axhline(y=0, linestyle="dashed", c="black")
+                plt_.axvline(x=0, linestyle="dashed", c="black")
+
+                # title_ = f'pearson cc (linear) = {np.round(corr_val_pe[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe[1]) + \
+                #         f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe_log[1]) + \
+                #         f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_sp[1]) + \
+                #         f'\n slope = {np.round(slope, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_pval) + \
+                #         f', slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_log_pval) + \
+                #         f'\n abs_median_error = {np.round(abs_mean_error, 3)}' + \
+                #         f'\n fit with p = {p_tmp}'
+                title_ = f'predicted vs observed growth ratio from {pass_} to {pass_ + 1}' + \
+                        f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_pe_log[1]) + \
+                        f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_sp[1]) + \
+                        f'\n slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                                '{:.3e}'.format(slope_log_pval) + \
+                        f'\n RMSE = {np.round(abs_mean_error, 3)}'
+
+                axes.set_title(title_, size=25)
+                plt_.set_xticklabels(plt_.get_xticklabels(), fontsize=20)
+                plt_.set_yticklabels(plt_.get_yticklabels(), fontsize=20)
+
+
+                save_dir = \
+                    os.path.abspath(os.path.join(dir_save_growth, \
+                                                'predicted_vs_observed_growth_ratio_LeaveOneOutRi', \
+                                                f'passage_{pass_}->{pass_ + 1}'))
+                
+                if not os.path.exists(save_dir):
+                # Create a new directory because it does not exist
+                    os.makedirs(save_dir)
+                
+                file_save = os.path.abspath(os.path.join(save_dir, 
+                                                        f'predicted_growth_vs_' + \
+                                                        f'observed_growth' + \
+                                                        f'_with_p{p_tmp}.png'))
+
+                fig.figure.savefig(file_save, \
+                                dpi=300, transparent=False, facecolor="white")
+                plt.close(fig.figure)
+    if plot_:
+        for pass_ in range(num_passages):
+            fig, axes = plt.subplots(1, 1, figsize=(20, 14), sharey="row", sharex="col")
+            fig.suptitle(f'corr, slope for predicted vs observed abundance \n' + \
+                        f' passage {pass_ + 1}', \
+                        fontsize=30)
+            fig.supxlabel('p', fontsize=30)
+            fig.supylabel('correlation or slope', fontsize=30)
+            df_corr_slope_tmp = df_corr_slope.copy()
+            df_corr_slope_tmp = df_corr_slope_tmp[df_corr_slope_tmp["passage"] == pass_]
+            
+            df_corr_slope_tmp = \
+                df_corr_slope_tmp[(df_corr_slope_tmp['metric_type'] != "corr_pearson_linear") & \
+                                (df_corr_slope_tmp['metric_type'] != "slope")]
+            plt_ = sns.scatterplot(data=df_corr_slope_tmp, x="p", y="metric", \
+                                hue="metric_type", ax=axes)
+            plt_ = sns.lineplot(data=df_corr_slope_tmp, x="p", y="metric", \
+                                hue="metric_type", ax=axes)
+            plt_.set_xscale("log", base=10)
+
+            save_dir = \
+                os.path.abspath(os.path.join(dir_save_abun, \
+                                                'predicted_vs_observed_abundance_LeaveOneOutRi', \
+                                                f'passage_{pass_ + 1}'))
+            if not os.path.exists(save_dir):
+                # Create a new directory because it does not exist
+                os.makedirs(save_dir)
+            
+            file_save = os.path.abspath(os.path.join(save_dir, 
+                                                        f'predicted_abundance_vs_' + \
+                                                        f'observed_abundance' + \
+                                                        f'_stats.png'))
+            fig.figure.savefig(file_save, dpi=300, transparent=False, facecolor="white")
+            plt.close(fig.figure)
+
+    del df_corr_slope
+
+    if return_sensitivity_ana:
+        return save_obj_return, RMSE_obj
+    # for pass_ in range(num_passages):
+    #     fig, axes = plt.subplots(1, 1, figsize=(20, 14), sharey="row", sharex="col")
+    #     fig.suptitle(f'corr, slope for predicted vs observed growth ratio \n' + \
+    #                 f' passage {pass_ + 1}', \
+    #                 fontsize=30)
+    #     fig.supxlabel('p', fontsize=30)
+    #     fig.supylabel('correlation or slope', fontsize=30)
+    #     df_corr_slope_tmp = df_corr_slope_growth.copy()
+    #     df_corr_slope_tmp = df_corr_slope_tmp[df_corr_slope_tmp["passage"] == pass_]
+    #     plt_ = sns.scatterplot(data=df_corr_slope_tmp, x="p", y="metric", \
+    #                         hue="metric_type", ax=axes)
+    #     plt_ = sns.lineplot(data=df_corr_slope_tmp, x="p", y="metric", \
+    #                         hue="metric_type", ax=axes)
+    #     plt_.set_xscale("log", base=10)
+
+    #     save_dir = \
+    #         os.path.abspath(os.path.join(dir_save_growth, \
+    #                                         'predicted_vs_observed_growth_ratio_LeaveOneOutRi', \
+    #                                         f'passage_{pass_}->{pass_ + 1}'))
+        
+    #     if not os.path.exists(save_dir):
+    #         # Create a new directory because it does not exist
+    #         os.makedirs(save_dir)
+        
+    #     file_save = os.path.abspath(os.path.join(save_dir, 
+    #                                                 f'predicted_growth_vs_' + \
+    #                                                 f'observed_growth' + \
+    #                                                 f'_stats.png'))
+    #     fig.figure.savefig(file_save, dpi=300, transparent=False, facecolor="white")
+    #     plt.close(fig.figure)
+
+
+def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
+                             df_speciesAbun_inoc, df_speciesAbun_mdl, \
+                             df_speciesAbun_prev_mdl, \
+                             df_speciesAbun_ratio_mdl, \
+                             Ri_, dir_save_abun_obj, \
+                             dir_save_abun, \
+                             dir_save_growth, \
+                             num_passages=6, num_iter=100, \
+                             thresh_zero=1e-10, Ri_ss=True, plot_=True, \
+                             save_data_obj=True, \
+                             return_sensitivity_ana=False, \
+                             get_prod=False, \
+                             B_alone=None, \
+                             df_speciesMetab_prod=None, \
+                             prod_use_prev=True, \
+                             num_passages_run=6, use_dilution=False, \
+                             dilution_factor=15000, \
+                             id_species_update=None, \
+                             use_avg_for_prod=True, \
+                             Ri_0=None, n_breps=3):
+    if Ri_0 is None:
+        Ri_0 = Ri_.copy()
+    num_species = df_speciesMetab_cluster.shape[0]
+    # if id_species_update is None:
+    #     id_species_update = np.arange(num_species)
+    if id_species_update is not None:
+        id_species_noupdate = \
+            np.array(list(set(range(num_species)) - \
+                 set(list(id_species_update))), dtype='long')
+    # simulate inoculum abundances and initial growth ratios
+    sample_names = df_speciesAbun_mdl.columns.values
+    # n_breps = 3
+    samples_first = sample_names[0 + np.arange(n_breps) * num_passages]
+    # ratio_init = np.zeros((num_species))
+    # num_rand = 100
+    # for rand_ in range(num_rand):
+    #     ratio_init_rand = np.zeros((num_species, n_breps))
+    #     for rep_ in range(n_breps):
+    #         vals_ = np.random.exponential(1 / num_species, num_species)
+    #         vals_ /= np.sum(vals_)
+    #         ratio_init_rand[:, rep_] = df_speciesAbun_mdl[samples_first[rep_]].values / \
+    #             vals_
+    #     ratio_init += np.mean(np.log10(ratio_init_rand), axis=1)
+    # ratio_init /= num_rand
+    # ratio_init = 10**ratio_init
+    ratio_init = np.ones(num_species)
+    # print(ratio_init)
+
+
+    df_corr_slope = pd.DataFrame(data={"norm_status" : [],
+                                    "passage" : [], 
+                                    "p" : [],
+                                    "metric_type" : [], 
+                                    "metric" : [],
+                                    "pval" : []})
+
+    df_corr_slope_growth = pd.DataFrame(data={"norm_status" : [],
+                                    "passage" : [], 
+                                    "p" : [],
+                                    "metric_type" : [], 
+                                    "metric" : [],
+                                    "pval" : []})
+    
+    df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
+    if return_sensitivity_ana:
+        save_obj_return = {}
+        RMSE_obj = {}
+    for count_p, p_tmp in enumerate(p_vec_new):
+        for pass_ in range(num_passages_run):
+            if pass_ == 0:
+                df_speciesAbun_prev_tmp_ = \
+                    df_speciesAbun_inoc.copy().iloc[:, :]
+            else:
+                growth_ratio_prev_ = growth_rate_all[num_iter - 1].copy()
+                df_tmp = growth_rate_all[num_iter - 1].copy()
+                for col_ in df_tmp.columns.values:
+                    if id_species_update is not None:
+                        df_tmp[col_][id_species_noupdate] = \
+                            1
+                    df_speciesAbun_prev_tmp_[col_] = \
+                        df_tmp[col_].values * df_speciesAbun_prev_tmp_[col_].values
+                    df_speciesAbun_prev_tmp_[col_][\
+                        df_speciesAbun_prev_tmp_[col_].values < thresh_zero] = \
+                        thresh_zero
+
+                    if id_species_update is None:
+                        df_speciesAbun_prev_tmp_[col_] /= \
+                            np.sum(df_speciesAbun_prev_tmp_[col_].values)
+                    else:
+                        df_speciesAbun_prev_tmp_[col_][id_species_update] /= \
+                            np.sum(df_speciesAbun_prev_tmp_[col_].values[id_species_update])
+            df_speciesAbun_next_tmp_ = df_speciesAbun_prev_tmp_.copy()
+
+
+            growth_rate_all = {}
+            growth_rate_all[0] = pd.DataFrame()
+            growth_rate_tmp = pd.DataFrame()
+            if Ri_ss:
+                Ri_avg = Ri_.copy()
+            else:
+                if pass_ != 0:
+                    Ri_avg = Ri_[count_p].copy()
+                else:
+                    Ri_avg = Ri_0[count_p].copy()
+            
+            for col_ in df_speciesAbun_prev_tmp_.columns.values:
+                # growth_rate_all[0][col_] = np.ones((num_species))
+                growth_rate_all[0][col_] = ratio_init
+                growth_rate_tmp[col_] = np.ones((num_species))
+
+
+
+            for iter_ in range(num_iter):
+                if iter_ == 0:
+                    iter_id = iter_
+                else:
+                    iter_id = iter_ - 1
+                
+                if (iter_ == 0) & (pass_ != 0):
+                    df_growth_rate = \
+                        compute_growth_ratio_iterate_blind(df_speciesAbun_prev_tmp_.copy(), \
+                                                        df_speciesAbun_next_tmp_.copy(), \
+                                                        p_tmp, Ri_avg.copy(), \
+                                                        # growth_ratio_prev_.copy(), \
+                                                        growth_rate_all[iter_id].copy(), \
+                                                        None, df_speciesMetab_tmp,
+                                                        norm_=False, get_prod=get_prod, \
+                                                        B_alone=B_alone, \
+                                                        df_speciesMetab_prod=df_speciesMetab_prod, \
+                                                        prod_use_prev=prod_use_prev, \
+                                                        use_dilution=use_dilution, \
+                                                        dilution_factor=dilution_factor, \
+                                                        use_avg_for_prod=use_avg_for_prod)
+                else:
+                    df_growth_rate = \
+                        compute_growth_ratio_iterate_blind(df_speciesAbun_prev_tmp_.copy(), \
+                                                           df_speciesAbun_next_tmp_.copy(), \
+                                                           p_tmp, Ri_avg.copy(), \
+                                                           growth_rate_all[iter_id].copy(), \
+                                                           None, df_speciesMetab_tmp,
+                                                           norm_=False, get_prod=get_prod, \
+                                                           B_alone=B_alone, \
+                                                           df_speciesMetab_prod=df_speciesMetab_prod, \
+                                                           prod_use_prev=prod_use_prev, \
+                                                           use_dilution=use_dilution, \
+                                                           dilution_factor=dilution_factor, \
+                                                           use_avg_for_prod=use_avg_for_prod)
+
+                growth_rate_all[iter_] = df_growth_rate.copy()
+            save_dir = \
+                os.path.abspath(os.path.join(dir_save_abun_obj, \
+                                             'predicted_vs_observed_abundance_LeaveOneOutRi', \
+                                             'predicted_abundance', \
+                                             f'passage_{pass_ + 1}'))
+            if not os.path.exists(save_dir):
+               # Create a new directory because it does not exist
+                os.makedirs(save_dir)
+            
+            file_save = os.path.abspath(os.path.join(save_dir, 
+                                                     f'predicted_abundance_Ri_fit' + \
+                                                     f'_with_p{p_tmp}.pickle'))
+            
+            save_obj = {'growth_rate_all' : growth_rate_all, \
+                        'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
+            # if return_sensitivity_ana:
+            #     save_obj_return[pass_] = \
+            #         {'growth_rate_all' : growth_rate_all[num_iter - 1], \
+            #          'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
+            if save_data_obj:
+                with open(file_save, "wb") as file_:
+                    pickle.dump(save_obj, file_)  
+            
+            
+            df_tmp = pd.DataFrame()
+            for col_ in df_speciesAbun_prev_tmp_.columns.values:
+                tmp_ = \
+                    growth_rate_all[num_iter - 1].copy()[col_].values * \
+                    df_speciesAbun_prev_tmp_[col_].values
+                # print(np.sum((growth_rate_all[num_iter - 1].copy()[col_].values * \
+                #               df_speciesAbun_prev_tmp_[col_].values) / \
+                #         np.sum(tmp_)))
+                    
+                if id_species_update is None:
+                    growth_rate_all[num_iter - 1][col_] = \
+                        growth_rate_all[num_iter - 1].copy()[col_].values / \
+                        np.sum(tmp_)
+                    # df_tmp[col_] /= np.sum(df_tmp[col_].values)
+                else:
+                    growth_rate_all[num_iter - 1][col_] = \
+                        growth_rate_all[num_iter - 1].copy()[col_].values / \
+                        np.sum(tmp_[id_species_update])
+                    growth_rate_all[num_iter - 1][col_][id_species_noupdate] = 1
+                    # df_tmp[col_][id_species_update] /= \
+                    #     np.sum(df_tmp[col_].values[id_species_update])
+                df_tmp[col_] = \
+                    growth_rate_all[num_iter - 1].copy()[col_].values * \
+                    df_speciesAbun_prev_tmp_[col_].values
+                # print(np.sum(df_tmp[col_].values))
+
+            b_ = range(3)
+            id_pass_rep = []
+            for r_ in range(n_breps):
+                id_pass_rep += [pass_ + num_passages * r_]
+            x = \
+                np.array(df_speciesAbun_mdl.copy().iloc[:, id_pass_rep])
+            x[x <= thresh_zero] = thresh_zero
+            # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
+            x = x.flatten()
+            # y = np.array(df_tmp.copy())[:, :].flatten()
+            y = np.array(df_tmp.copy())[:, :]
+            y_stack = y.copy()
+            if n_breps > 1:
+                for rep_ in range(1, n_breps):
+                    y_stack = np.hstack([y, y_stack])
+            # y = np.hstack([y, y, y]).flatten()
+            y = y_stack.flatten()
+            y[y <= thresh_zero] = thresh_zero
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names_stack = species_names.copy()
+                if n_breps > 1:
+                    for rep_ in range(1, n_breps):
+                        species_names_stack = np.hstack([species_names, species_names_stack])
+                species_names = species_names_stack.copy()
+                # species_names = np.hstack([species_names, species_names, species_names])
+                save_obj_return[pass_] = \
+                    {'growth_ratio_all' : growth_rate_all[num_iter - 1], \
+                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
+                     'df_speciesAbun_next_pred' : y, \
+                     'df_speciesAbun_next_obs' : x, \
+                     'species_names' : species_names}
+            # print(x.shape)
+            
+            id_ = np.where((x > 0) & (y > 0))[0]
+            # id_ord = np.where((x > 0) & (y > 0))[0]
+            x = np.log10(x[id_])
+            y = np.log10(y[id_])
+            # zero_thresh = -10
+            y[y <= np.log10(thresh_zero)] = np.log10(thresh_zero)
+
+            # if pass_ > 0:
+            #     pass_tmp = pass_ - 1
+            #     df_speciesAbun_ratio_tmp_1 = \
+            #         df_speciesAbun_ratio_mdl.copy().iloc[:, [pass_tmp, pass_tmp + 5, \
+            #                                                  pass_tmp + 10]]
+            #     x_r = \
+            #         np.array(df_speciesAbun_ratio_tmp_1)
+            #     x_new = -1 * np.ones(x_r.shape[0])
+            #     for row_ in range(x_r.shape[0]):
+            #         id_tmp = np.where(x_r[row_, :] > 0)[0]
+            #         if len(id_tmp) > 0:
+            #             x_new[row_] = 10**np.mean(np.log10(x_r[row_, id_tmp]))
+            #     # id_tmp = np.where(x_new > 0)[0]
+            #     # x_r = x_new[id_tmp]
+            #     x_r = x_new
+            #     x_r[x_r < 0] = 1 
+            # else:
+            #     x_r = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]])
+            #     x_r = 10**np.mean(np.log10(x_r), axis=1).flatten()
+            #     x_r /= np.array(df_speciesAbun_inoc).flatten()
+
+            # # id_ = np.where((x > 0) & (y > 0))[0]
+            # x_r = x_r[id_ord]
+
+            # x_r[x_r > 1] = 3
+            # x_r[x_r == 1] = 2
+            # x_r[x_r < 1] = 1
+            # growth_ord_tmp = [100*n**2 for n in x_r]
+
+            abs_mean_error = np.sqrt(np.mean(np.power(y - x, 2)))
+            if return_sensitivity_ana:
+                RMSE_obj[pass_] = {}
+                RMSE_obj[pass_]["abundance"] = abs_mean_error
+
+            if plot_:
+                fig, axes = plt.subplots(1, 1, figsize=(16, 18), sharey="row", sharex="col")
+                fig.supylabel('predicted abundance (log scale)', fontsize=30)
+                fig.supxlabel('observed abundance (log scale)', fontsize=30)
+                # plt_ = sns.scatterplot(x=x, \
+                #                        y=y, s=growth_ord_tmp, ax=axes)
+                plt_ = sns.scatterplot(x=x, \
+                                    y=y, s=100, ax=axes)
+
+                plt_ = sns.kdeplot(x=x, y=y, fill=True, alpha=0.6, cmap="Reds", \
+                                ax=axes)
+                plt_.plot([-8, 0], [-8, 0], c="red", linewidth=3)
+
+                corr_val_pe = scipy.stats.pearsonr(10**x, 10**y)
+                corr_val_pe_log = scipy.stats.pearsonr(x, y)
+                corr_val_sp = scipy.stats.spearmanr(x, y)
+                # abs_mean_error = np.median(np.abs(y - x))
+                std_error = np.sqrt(np.std(np.power(y - x, 2)))
+
+                id_notzero_zero = np.where((x > -8) & (y <= -8))[0]
+
+                frac_zero = len(id_notzero_zero) / len(x)
+
+                model = sm.OLS(10**y, 10**x).fit()
+                slope = model.params[0]
+                slope_pval = model.pvalues[0]
+                
+                model_log = sm.OLS(y, x).fit()
+                slope_log = model_log.params[0]
+                slope_log_pval = model_log.pvalues[0]
+
+                df_tmp = \
+                    pd.DataFrame(data={"passage" : [pass_] * 8, 
+                                    "p" : [p_tmp] * 8, 
+                                    "metric_type" : ["corr_pearson_log", 
+                                                        "corr_spearman", "slope", "slope_log", \
+                                                        "corr_pearson_linear", \
+                                                        "RMSE", \
+                                                        "RSSE", "FNR"], 
+                                    "metric" : [corr_val_pe_log[0], 
+                                                corr_val_sp[0], slope, slope_log, \
+                                                corr_val_pe[0], abs_mean_error, \
+                                                std_error, \
+                                                frac_zero],
+                                    "pval" : [corr_val_pe_log[1], 
+                                                corr_val_sp[1], slope_pval, slope_log_pval, \
+                                                corr_val_pe[1], 0, 0, 0]})
+                df_corr_slope = pd.concat([df_corr_slope, df_tmp], ignore_index=True)
+
+                # plt_.plot([-8, 0], [np.log10(slope * (1e-8)), np.log10(slope * 1)], c="green")
+                plt_.plot([-8, 0], [(slope_log * (-8)), (slope_log * 0)], c="green", \
+                        linewidth=3)
+
+                # title_ = f'pearson cc (linear) = {np.round(corr_val_pe[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe[1]) + \
+                #         f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe_log[1]) + \
+                #         f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_sp[1]) + \
+                #         f'\n slope = {np.round(slope, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_pval) + \
+                #         f', slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_log_pval) + \
+                #         f'\n abs_median_error = {np.round(abs_mean_error, 3)}' + \
+                #         f'\n fit with p = {p_tmp}'
+                title_ = f'predicted vs observed abundance at passage {pass_ + 1}' + \
+                        f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_pe_log[1]) + \
+                        f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_sp[1]) + \
+                        f'\n slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                                '{:.3e}'.format(slope_log_pval) + \
+                        f'\n RMSE = {np.round(abs_mean_error, 3)}'
+
+                axes.set_title(title_, size=25)
+                plt_.set_xticklabels(plt_.get_xticklabels(), fontsize=20)
+                plt_.set_yticklabels(plt_.get_yticklabels(), fontsize=20)
+
+                save_dir = \
+                    os.path.abspath(os.path.join(dir_save_abun, \
+                                                'predicted_vs_observed_abundance_LeaveOneOutRi', \
+                                                f'passage_{pass_ + 1}'))
+                if not os.path.exists(save_dir):
+                # Create a new directory because it does not exist
+                    os.makedirs(save_dir)
+                
+                file_save = os.path.abspath(os.path.join(save_dir, 
+                                                        f'predicted_abundance_vs_' + \
+                                                        f'observed_abundance' + \
+                                                        f'_with_p{p_tmp}.png'))
+
+                fig.figure.savefig(file_save, \
+                                dpi=300, transparent=False, facecolor="white")
+                plt.close(fig.figure)
+            
+            # Plot growth ratios
+            if pass_ > 0:
+                pass_tmp = pass_ - 1
+                id_pass_rep = []
+                for r_ in range(n_breps):
+                    id_pass_rep += [pass_tmp + (num_passages - 1) * r_]
+                df_speciesAbun_ratio_tmp_1 = \
+                    df_speciesAbun_ratio_mdl.iloc[:, id_pass_rep].copy()
+                abun_prev = df_speciesAbun_prev_mdl.iloc[:, id_pass_rep].copy()
                 abun_prev = np.array(abun_prev)
                 abun_prev[abun_prev == 0] = thresh_zero
                 abun_prev = 10**np.mean(np.log10(abun_prev), axis=1)
@@ -2653,7 +3530,10 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                 y = np.array(growth_rate_all[num_iter - 1].copy())[:, :].flatten()
                 y = y[id_tmp]
             else:
-                x = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]].copy())
+                id_pass_rep = []
+                for r_ in range(n_breps):
+                    id_pass_rep += [pass_ + (num_passages) * r_]
+                x = np.array(df_speciesAbun_mdl.iloc[:, id_pass_rep].copy())
                 x[x == 0] = thresh_zero
                 x = 10**np.mean(np.log10(x), axis=1).flatten()
                 x_inoc_tmp = np.array(df_speciesAbun_inoc.copy()).flatten()
@@ -2671,7 +3551,613 @@ def blindly_pred_abun_growth(p_vec_new, df_speciesMetab_cluster, \
                     save_obj_return[pass_]['growth_ratio_obs'] = \
                         np.array(df_speciesAbun_ratio_tmp_1.copy())
                 else:
-                    save_obj_return[pass_]['growth_ratio_obs'] = np.hstack([x, x, x])
+                    x_stack = x.copy()
+                    if n_breps > 1:
+                        for rep_ in range(1, n_breps):
+                            x_stack = np.hstack([x, x_stack])
+                    save_obj_return[pass_]['growth_ratio_obs'] = x_stack.copy()
+            id_ = np.where((x > 0) & (y > 0))[0]
+            x = np.log10(x[id_])
+            y = np.log10(y[id_])
+            # y=np.random.permutation(x)
+            y[y <= -4] = -4
+            x[x <= -4] = -4
+            df_plt = pd.DataFrame(data={"x" : x, "y" : y, \
+                                        "abun_prev" : abun_prev[id_]})
+            prev_ord = np.argsort(abun_prev)
+            prev_ord_tmp = [0.2*n**2 for n in prev_ord]
+            abs_mean_error = np.sqrt(np.mean(np.power(y - x, 2)))
+            if return_sensitivity_ana:
+                RMSE_obj[pass_]["growth_ratio"] = abs_mean_error
+
+            if plot_:
+                fig, axes = plt.subplots(1, 1, figsize=(16, 18), sharey="row", sharex="col")
+                fig.supylabel('predicted growth ratio (log scale)', fontsize=25)
+                fig.supxlabel('observed growth ratio (log scale)', fontsize=25)
+                # plt_ = sns.scatterplot(data=df_plt, x="x", \
+                #                        y="y", s=prev_ord_tmp, ax=axes)
+                plt_ = sns.scatterplot(data=df_plt, x="x", \
+                                    y="y", s=100, ax=axes)
+
+                plt_ = sns.kdeplot(x=x, y=y, fill=True, alpha=0.6, cmap="Reds", \
+                                ax=axes)
+                plt_.plot([-4, 2], [-4, 2], c="red", linewidth=3)
+
+                corr_val_pe = scipy.stats.pearsonr(10**x, 10**y)
+                corr_val_pe_log = scipy.stats.pearsonr(x, y)
+                corr_val_sp = scipy.stats.spearmanr(x, y)
+                std_error = np.sqrt(np.std(np.power(y - x, 2)))
+                id_notzero_zero = np.where((x > -5) & (y <= -5))[0]
+
+                frac_zero = len(id_notzero_zero) / len(x)
+
+                model = sm.OLS(10**y, 10**x).fit()
+                slope = model.params[0]
+                slope_pval = model.pvalues[0]
+                
+                model_log = sm.OLS(y, x).fit()
+                slope_log = model_log.params[0]
+                slope_log_pval = model_log.pvalues[0]
+
+                # df_tmp = \
+                #     pd.DataFrame(data={"p" : [p_tmp] * 8, 
+                #                     "metric_type" : ["corr_pearson_log", 
+                #                                         "corr_spearman", "slope", "slope_log", \
+                #                                         "corr_pearson_linear", \
+                #                                         "RMSE", \
+                #                                         "std_error", "FNR"], 
+                #                     "metric" : [corr_val_pe_log[0], 
+                #                                 corr_val_sp[0], slope, slope_log, \
+                #                                 corr_val_pe[0], abs_mean_error, \
+                #                                 std_error, \
+                #                                 frac_zero],
+                #                     "pval" : [corr_val_pe_log[1], 
+                #                                 corr_val_sp[1], slope_pval, slope_log_pval, \
+                #                                 corr_val_pe[1], 0, 0, 0]})
+                # df_corr_slope_growth = \
+                #     pd.concat([df_corr_slope_growth, df_tmp], ignore_index=True)
+
+
+                # plt_.plot([-4, 2], [np.log10(slope * (1e-4)), np.log10(slope * 1e2)], c="green")
+                plt_.plot([-4, 2], [(slope_log * (-4)), (slope_log * 2)], c="green", \
+                        linewidth=3)
+                plt_.axhline(y=0, linestyle="dashed", c="black")
+                plt_.axvline(x=0, linestyle="dashed", c="black")
+
+                # title_ = f'pearson cc (linear) = {np.round(corr_val_pe[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe[1]) + \
+                #         f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe_log[1]) + \
+                #         f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_sp[1]) + \
+                #         f'\n slope = {np.round(slope, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_pval) + \
+                #         f', slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_log_pval) + \
+                #         f'\n abs_median_error = {np.round(abs_mean_error, 3)}' + \
+                #         f'\n fit with p = {p_tmp}'
+                title_ = f'predicted vs observed growth ratio from {pass_} to {pass_ + 1}' + \
+                        f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_pe_log[1]) + \
+                        f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_sp[1]) + \
+                        f'\n slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                                '{:.3e}'.format(slope_log_pval) + \
+                        f'\n RMSE = {np.round(abs_mean_error, 3)}'
+
+                axes.set_title(title_, size=25)
+                plt_.set_xticklabels(plt_.get_xticklabels(), fontsize=20)
+                plt_.set_yticklabels(plt_.get_yticklabels(), fontsize=20)
+
+
+                save_dir = \
+                    os.path.abspath(os.path.join(dir_save_growth, \
+                                                'predicted_vs_observed_growth_ratio_LeaveOneOutRi', \
+                                                f'passage_{pass_}->{pass_ + 1}'))
+                
+                if not os.path.exists(save_dir):
+                # Create a new directory because it does not exist
+                    os.makedirs(save_dir)
+                
+                file_save = os.path.abspath(os.path.join(save_dir, 
+                                                        f'predicted_growth_vs_' + \
+                                                        f'observed_growth' + \
+                                                        f'_with_p{p_tmp}.png'))
+
+                fig.figure.savefig(file_save, \
+                                dpi=300, transparent=False, facecolor="white")
+                plt.close(fig.figure)
+    if plot_:
+        for pass_ in range(num_passages):
+            fig, axes = plt.subplots(1, 1, figsize=(20, 14), sharey="row", sharex="col")
+            fig.suptitle(f'corr, slope for predicted vs observed abundance \n' + \
+                        f' passage {pass_ + 1}', \
+                        fontsize=30)
+            fig.supxlabel('p', fontsize=30)
+            fig.supylabel('correlation or slope', fontsize=30)
+            df_corr_slope_tmp = df_corr_slope.copy()
+            df_corr_slope_tmp = df_corr_slope_tmp[df_corr_slope_tmp["passage"] == pass_]
+            
+            df_corr_slope_tmp = \
+                df_corr_slope_tmp[(df_corr_slope_tmp['metric_type'] != "corr_pearson_linear") & \
+                                (df_corr_slope_tmp['metric_type'] != "slope")]
+            plt_ = sns.scatterplot(data=df_corr_slope_tmp, x="p", y="metric", \
+                                hue="metric_type", ax=axes)
+            plt_ = sns.lineplot(data=df_corr_slope_tmp, x="p", y="metric", \
+                                hue="metric_type", ax=axes)
+            plt_.set_xscale("log", base=10)
+
+            save_dir = \
+                os.path.abspath(os.path.join(dir_save_abun, \
+                                                'predicted_vs_observed_abundance_LeaveOneOutRi', \
+                                                f'passage_{pass_ + 1}'))
+            if not os.path.exists(save_dir):
+                # Create a new directory because it does not exist
+                os.makedirs(save_dir)
+            
+            file_save = os.path.abspath(os.path.join(save_dir, 
+                                                        f'predicted_abundance_vs_' + \
+                                                        f'observed_abundance' + \
+                                                        f'_stats.png'))
+            fig.figure.savefig(file_save, dpi=300, transparent=False, facecolor="white")
+            plt.close(fig.figure)
+
+    del df_corr_slope
+
+    if return_sensitivity_ana:
+        return save_obj_return, RMSE_obj
+    # for pass_ in range(num_passages):
+    #     fig, axes = plt.subplots(1, 1, figsize=(20, 14), sharey="row", sharex="col")
+    #     fig.suptitle(f'corr, slope for predicted vs observed growth ratio \n' + \
+    #                 f' passage {pass_ + 1}', \
+    #                 fontsize=30)
+    #     fig.supxlabel('p', fontsize=30)
+    #     fig.supylabel('correlation or slope', fontsize=30)
+    #     df_corr_slope_tmp = df_corr_slope_growth.copy()
+    #     df_corr_slope_tmp = df_corr_slope_tmp[df_corr_slope_tmp["passage"] == pass_]
+    #     plt_ = sns.scatterplot(data=df_corr_slope_tmp, x="p", y="metric", \
+    #                         hue="metric_type", ax=axes)
+    #     plt_ = sns.lineplot(data=df_corr_slope_tmp, x="p", y="metric", \
+    #                         hue="metric_type", ax=axes)
+    #     plt_.set_xscale("log", base=10)
+
+    #     save_dir = \
+    #         os.path.abspath(os.path.join(dir_save_growth, \
+    #                                         'predicted_vs_observed_growth_ratio_LeaveOneOutRi', \
+    #                                         f'passage_{pass_}->{pass_ + 1}'))
+        
+    #     if not os.path.exists(save_dir):
+    #         # Create a new directory because it does not exist
+    #         os.makedirs(save_dir)
+        
+    #     file_save = os.path.abspath(os.path.join(save_dir, 
+    #                                                 f'predicted_growth_vs_' + \
+    #                                                 f'observed_growth' + \
+    #                                                 f'_stats.png'))
+    #     fig.figure.savefig(file_save, dpi=300, transparent=False, facecolor="white")
+    #     plt.close(fig.figure)
+
+def blindly_pred_abun_growth_logRatio(p_vec_new, df_speciesMetab_cluster, \
+                             df_speciesAbun_inoc, df_speciesAbun_mdl, \
+                             df_speciesAbun_prev_mdl, \
+                             df_speciesAbun_ratio_mdl, \
+                             Ri_, dir_save_abun_obj, \
+                             dir_save_abun, \
+                             dir_save_growth, \
+                             num_passages=6, num_iter=100, \
+                             thresh_zero=1e-10, Ri_ss=True, plot_=True, \
+                             save_data_obj=True, \
+                             return_sensitivity_ana=False, \
+                             get_prod=False, \
+                             B_alone=None, \
+                             df_speciesMetab_prod=None, \
+                             prod_use_prev=True, \
+                             num_passages_run=6, use_dilution=False, \
+                             dilution_factor=15000, \
+                             id_species_update=None, \
+                             use_avg_for_prod=True, \
+                             Ri_0=None, n_breps=3):
+    if Ri_0 is None:
+        Ri_0 = Ri_.copy()
+    num_species = df_speciesMetab_cluster.shape[0]
+    # if id_species_update is None:
+    #     id_species_update = np.arange(num_species)
+    if id_species_update is not None:
+        id_species_noupdate = \
+            np.array(list(set(range(num_species)) - \
+                 set(list(id_species_update))), dtype='long')
+    # simulate inoculum abundances and initial growth ratios
+    sample_names = df_speciesAbun_mdl.columns.values
+    # n_breps = 3
+    samples_first = sample_names[0 + np.arange(n_breps) * num_passages]
+    # ratio_init = np.zeros((num_species))
+    # num_rand = 100
+    # for rand_ in range(num_rand):
+    #     ratio_init_rand = np.zeros((num_species, n_breps))
+    #     for rep_ in range(n_breps):
+    #         vals_ = np.random.exponential(1 / num_species, num_species)
+    #         vals_ /= np.sum(vals_)
+    #         ratio_init_rand[:, rep_] = df_speciesAbun_mdl[samples_first[rep_]].values / \
+    #             vals_
+    #     ratio_init += np.mean(np.log10(ratio_init_rand), axis=1)
+    # ratio_init /= num_rand
+    # ratio_init = 10**ratio_init
+    ratio_init = np.ones(num_species)
+    # print(ratio_init)
+
+
+    df_corr_slope = pd.DataFrame(data={"norm_status" : [],
+                                    "passage" : [], 
+                                    "p" : [],
+                                    "metric_type" : [], 
+                                    "metric" : [],
+                                    "pval" : []})
+
+    df_corr_slope_growth = pd.DataFrame(data={"norm_status" : [],
+                                    "passage" : [], 
+                                    "p" : [],
+                                    "metric_type" : [], 
+                                    "metric" : [],
+                                    "pval" : []})
+    
+    df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
+    if return_sensitivity_ana:
+        save_obj_return = {}
+        RMSE_obj = {}
+    for count_p, p_tmp in enumerate(p_vec_new):
+        for pass_ in range(num_passages_run):
+            if pass_ == 0:
+                df_speciesAbun_prev_tmp_ = \
+                    df_speciesAbun_inoc.copy().iloc[:, :]
+            else:
+                growth_ratio_prev_ = growth_rate_all[num_iter - 1].copy()
+                df_tmp = growth_rate_all[num_iter - 1].copy()
+                for col_ in df_tmp.columns.values:
+                    if id_species_update is not None:
+                        df_tmp[col_][id_species_noupdate] = \
+                            1
+                    df_speciesAbun_prev_tmp_[col_] = \
+                        df_tmp[col_].values * df_speciesAbun_prev_tmp_[col_].values
+                    df_speciesAbun_prev_tmp_[col_][\
+                        df_speciesAbun_prev_tmp_[col_].values < thresh_zero] = \
+                        thresh_zero
+
+                    if id_species_update is None:
+                        df_speciesAbun_prev_tmp_[col_] /= \
+                            np.sum(df_speciesAbun_prev_tmp_[col_].values)
+                    else:
+                        df_speciesAbun_prev_tmp_[col_][id_species_update] /= \
+                            np.sum(df_speciesAbun_prev_tmp_[col_].values[id_species_update])
+            df_speciesAbun_next_tmp_ = df_speciesAbun_prev_tmp_.copy()
+
+
+            growth_rate_all = {}
+            growth_rate_all[0] = pd.DataFrame()
+            growth_rate_tmp = pd.DataFrame()
+            if Ri_ss:
+                Ri_avg = Ri_.copy()
+            else:
+                if pass_ != 0:
+                    Ri_avg = Ri_[count_p].copy()
+                else:
+                    Ri_avg = Ri_0[count_p].copy()
+            
+            for col_ in df_speciesAbun_prev_tmp_.columns.values:
+                # growth_rate_all[0][col_] = np.ones((num_species))
+                growth_rate_all[0][col_] = ratio_init
+                growth_rate_tmp[col_] = np.ones((num_species))
+
+
+
+            for iter_ in range(num_iter):
+                if iter_ == 0:
+                    iter_id = iter_
+                else:
+                    iter_id = iter_ - 1
+                
+                if (iter_ == 0) & (pass_ != 0):
+                    df_growth_rate = \
+                        compute_growth_ratio_iterate_blind_logRatio(df_speciesAbun_prev_tmp_.copy(), \
+                                                        df_speciesAbun_next_tmp_.copy(), \
+                                                        p_tmp, Ri_avg.copy(), \
+                                                        # growth_ratio_prev_.copy(), \
+                                                        growth_rate_all[iter_id].copy(), \
+                                                        None, df_speciesMetab_tmp,
+                                                        norm_=False, get_prod=get_prod, \
+                                                        B_alone=B_alone, \
+                                                        df_speciesMetab_prod=df_speciesMetab_prod, \
+                                                        prod_use_prev=prod_use_prev, \
+                                                        use_dilution=use_dilution, \
+                                                        dilution_factor=dilution_factor, \
+                                                        use_avg_for_prod=use_avg_for_prod)
+                else:
+                    df_growth_rate = \
+                        compute_growth_ratio_iterate_blind_logRatio(df_speciesAbun_prev_tmp_.copy(), \
+                                                           df_speciesAbun_next_tmp_.copy(), \
+                                                           p_tmp, Ri_avg.copy(), \
+                                                           growth_rate_all[iter_id].copy(), \
+                                                           None, df_speciesMetab_tmp,
+                                                           norm_=False, get_prod=get_prod, \
+                                                           B_alone=B_alone, \
+                                                           df_speciesMetab_prod=df_speciesMetab_prod, \
+                                                           prod_use_prev=prod_use_prev, \
+                                                           use_dilution=use_dilution, \
+                                                           dilution_factor=dilution_factor, \
+                                                           use_avg_for_prod=use_avg_for_prod)
+
+                growth_rate_all[iter_] = df_growth_rate.copy()
+            save_dir = \
+                os.path.abspath(os.path.join(dir_save_abun_obj, \
+                                             'predicted_vs_observed_abundance_LeaveOneOutRi', \
+                                             'predicted_abundance', \
+                                             f'passage_{pass_ + 1}'))
+            if not os.path.exists(save_dir):
+               # Create a new directory because it does not exist
+                os.makedirs(save_dir)
+            
+            file_save = os.path.abspath(os.path.join(save_dir, 
+                                                     f'predicted_abundance_Ri_fit' + \
+                                                     f'_with_p{p_tmp}.pickle'))
+            
+            save_obj = {'growth_rate_all' : growth_rate_all, \
+                        'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
+            # if return_sensitivity_ana:
+            #     save_obj_return[pass_] = \
+            #         {'growth_rate_all' : growth_rate_all[num_iter - 1], \
+            #          'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_}
+            if save_data_obj:
+                with open(file_save, "wb") as file_:
+                    pickle.dump(save_obj, file_)  
+            
+            
+            df_tmp = pd.DataFrame()
+            for col_ in df_speciesAbun_prev_tmp_.columns.values:
+                tmp_ = \
+                    growth_rate_all[num_iter - 1].copy()[col_].values * \
+                    df_speciesAbun_prev_tmp_[col_].values
+                # print(np.sum((growth_rate_all[num_iter - 1].copy()[col_].values * \
+                #               df_speciesAbun_prev_tmp_[col_].values) / \
+                #         np.sum(tmp_)))
+                    
+                if id_species_update is None:
+                    growth_rate_all[num_iter - 1][col_] = \
+                        growth_rate_all[num_iter - 1].copy()[col_].values / \
+                        np.sum(tmp_)
+                    # df_tmp[col_] /= np.sum(df_tmp[col_].values)
+                else:
+                    growth_rate_all[num_iter - 1][col_] = \
+                        growth_rate_all[num_iter - 1].copy()[col_].values / \
+                        np.sum(tmp_[id_species_update])
+                    growth_rate_all[num_iter - 1][col_][id_species_noupdate] = 1
+                    # df_tmp[col_][id_species_update] /= \
+                    #     np.sum(df_tmp[col_].values[id_species_update])
+                df_tmp[col_] = \
+                    growth_rate_all[num_iter - 1].copy()[col_].values * \
+                    df_speciesAbun_prev_tmp_[col_].values
+                # print(np.sum(df_tmp[col_].values))
+
+            b_ = range(3)
+            id_pass_rep = []
+            for r_ in range(n_breps):
+                id_pass_rep += [pass_ + num_passages * r_]
+            x = \
+                np.array(df_speciesAbun_mdl.copy().iloc[:, id_pass_rep])
+            x[x <= thresh_zero] = thresh_zero
+            # x = 10**(np.mean(np.log10(x), axis=1)).flatten()
+            x = x.flatten()
+            # y = np.array(df_tmp.copy())[:, :].flatten()
+            y = np.array(df_tmp.copy())[:, :]
+            y_stack = y.copy()
+            if n_breps > 1:
+                for rep_ in range(1, n_breps):
+                    y_stack = np.hstack([y, y_stack])
+            # y = np.hstack([y, y, y]).flatten()
+            y = y_stack.flatten()
+            y[y <= thresh_zero] = thresh_zero
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names_stack = species_names.copy()
+                if n_breps > 1:
+                    for rep_ in range(1, n_breps):
+                        species_names_stack = np.hstack([species_names, species_names_stack])
+                species_names = species_names_stack.copy()
+                # species_names = np.hstack([species_names, species_names, species_names])
+                save_obj_return[pass_] = \
+                    {'growth_ratio_all' : growth_rate_all[num_iter - 1], \
+                     'df_speciesAbun_prev' : df_speciesAbun_prev_tmp_, \
+                     'df_speciesAbun_next_pred' : y, \
+                     'df_speciesAbun_next_obs' : x, \
+                     'species_names' : species_names}
+            # print(x.shape)
+            
+            id_ = np.where((x > 0) & (y > 0))[0]
+            # id_ord = np.where((x > 0) & (y > 0))[0]
+            x = np.log10(x[id_])
+            y = np.log10(y[id_])
+            # zero_thresh = -10
+            y[y <= np.log10(thresh_zero)] = np.log10(thresh_zero)
+
+            # if pass_ > 0:
+            #     pass_tmp = pass_ - 1
+            #     df_speciesAbun_ratio_tmp_1 = \
+            #         df_speciesAbun_ratio_mdl.copy().iloc[:, [pass_tmp, pass_tmp + 5, \
+            #                                                  pass_tmp + 10]]
+            #     x_r = \
+            #         np.array(df_speciesAbun_ratio_tmp_1)
+            #     x_new = -1 * np.ones(x_r.shape[0])
+            #     for row_ in range(x_r.shape[0]):
+            #         id_tmp = np.where(x_r[row_, :] > 0)[0]
+            #         if len(id_tmp) > 0:
+            #             x_new[row_] = 10**np.mean(np.log10(x_r[row_, id_tmp]))
+            #     # id_tmp = np.where(x_new > 0)[0]
+            #     # x_r = x_new[id_tmp]
+            #     x_r = x_new
+            #     x_r[x_r < 0] = 1 
+            # else:
+            #     x_r = np.array(df_speciesAbun_mdl.iloc[:, [pass_, pass_ + 6, pass_ + 12]])
+            #     x_r = 10**np.mean(np.log10(x_r), axis=1).flatten()
+            #     x_r /= np.array(df_speciesAbun_inoc).flatten()
+
+            # # id_ = np.where((x > 0) & (y > 0))[0]
+            # x_r = x_r[id_ord]
+
+            # x_r[x_r > 1] = 3
+            # x_r[x_r == 1] = 2
+            # x_r[x_r < 1] = 1
+            # growth_ord_tmp = [100*n**2 for n in x_r]
+
+            abs_mean_error = np.sqrt(np.mean(np.power(y - x, 2)))
+            if return_sensitivity_ana:
+                RMSE_obj[pass_] = {}
+                RMSE_obj[pass_]["abundance"] = abs_mean_error
+
+            if plot_:
+                fig, axes = plt.subplots(1, 1, figsize=(16, 18), sharey="row", sharex="col")
+                fig.supylabel('predicted abundance (log scale)', fontsize=30)
+                fig.supxlabel('observed abundance (log scale)', fontsize=30)
+                # plt_ = sns.scatterplot(x=x, \
+                #                        y=y, s=growth_ord_tmp, ax=axes)
+                plt_ = sns.scatterplot(x=x, \
+                                    y=y, s=100, ax=axes)
+
+                plt_ = sns.kdeplot(x=x, y=y, fill=True, alpha=0.6, cmap="Reds", \
+                                ax=axes)
+                plt_.plot([-8, 0], [-8, 0], c="red", linewidth=3)
+
+                corr_val_pe = scipy.stats.pearsonr(10**x, 10**y)
+                corr_val_pe_log = scipy.stats.pearsonr(x, y)
+                corr_val_sp = scipy.stats.spearmanr(x, y)
+                # abs_mean_error = np.median(np.abs(y - x))
+                std_error = np.sqrt(np.std(np.power(y - x, 2)))
+
+                id_notzero_zero = np.where((x > -8) & (y <= -8))[0]
+
+                frac_zero = len(id_notzero_zero) / len(x)
+
+                model = sm.OLS(10**y, 10**x).fit()
+                slope = model.params[0]
+                slope_pval = model.pvalues[0]
+                
+                model_log = sm.OLS(y, x).fit()
+                slope_log = model_log.params[0]
+                slope_log_pval = model_log.pvalues[0]
+
+                df_tmp = \
+                    pd.DataFrame(data={"passage" : [pass_] * 8, 
+                                    "p" : [p_tmp] * 8, 
+                                    "metric_type" : ["corr_pearson_log", 
+                                                        "corr_spearman", "slope", "slope_log", \
+                                                        "corr_pearson_linear", \
+                                                        "RMSE", \
+                                                        "RSSE", "FNR"], 
+                                    "metric" : [corr_val_pe_log[0], 
+                                                corr_val_sp[0], slope, slope_log, \
+                                                corr_val_pe[0], abs_mean_error, \
+                                                std_error, \
+                                                frac_zero],
+                                    "pval" : [corr_val_pe_log[1], 
+                                                corr_val_sp[1], slope_pval, slope_log_pval, \
+                                                corr_val_pe[1], 0, 0, 0]})
+                df_corr_slope = pd.concat([df_corr_slope, df_tmp], ignore_index=True)
+
+                # plt_.plot([-8, 0], [np.log10(slope * (1e-8)), np.log10(slope * 1)], c="green")
+                plt_.plot([-8, 0], [(slope_log * (-8)), (slope_log * 0)], c="green", \
+                        linewidth=3)
+
+                # title_ = f'pearson cc (linear) = {np.round(corr_val_pe[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe[1]) + \
+                #         f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_pe_log[1]) + \
+                #         f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                #                 '{:.3e}'.format(corr_val_sp[1]) + \
+                #         f'\n slope = {np.round(slope, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_pval) + \
+                #         f', slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                #                 '{:.3e}'.format(slope_log_pval) + \
+                #         f'\n abs_median_error = {np.round(abs_mean_error, 3)}' + \
+                #         f'\n fit with p = {p_tmp}'
+                title_ = f'predicted vs observed abundance at passage {pass_ + 1}' + \
+                        f'\n pearson cc (log) = {np.round(corr_val_pe_log[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_pe_log[1]) + \
+                        f'\n spearman cc = {np.round(corr_val_sp[0], 3)}, pval = ' + \
+                                '{:.3e}'.format(corr_val_sp[1]) + \
+                        f'\n slope_log = {np.round(slope_log, 3)} pvalue = ' + \
+                                '{:.3e}'.format(slope_log_pval) + \
+                        f'\n RMSE = {np.round(abs_mean_error, 3)}'
+
+                axes.set_title(title_, size=25)
+                plt_.set_xticklabels(plt_.get_xticklabels(), fontsize=20)
+                plt_.set_yticklabels(plt_.get_yticklabels(), fontsize=20)
+
+                save_dir = \
+                    os.path.abspath(os.path.join(dir_save_abun, \
+                                                'predicted_vs_observed_abundance_LeaveOneOutRi', \
+                                                f'passage_{pass_ + 1}'))
+                if not os.path.exists(save_dir):
+                # Create a new directory because it does not exist
+                    os.makedirs(save_dir)
+                
+                file_save = os.path.abspath(os.path.join(save_dir, 
+                                                        f'predicted_abundance_vs_' + \
+                                                        f'observed_abundance' + \
+                                                        f'_with_p{p_tmp}.png'))
+
+                fig.figure.savefig(file_save, \
+                                dpi=300, transparent=False, facecolor="white")
+                plt.close(fig.figure)
+            
+            # Plot growth ratios
+            if pass_ > 0:
+                pass_tmp = pass_ - 1
+                id_pass_rep = []
+                for r_ in range(n_breps):
+                    id_pass_rep += [pass_tmp + (num_passages - 1) * r_]
+                df_speciesAbun_ratio_tmp_1 = \
+                    df_speciesAbun_ratio_mdl.iloc[:, id_pass_rep].copy()
+                abun_prev = df_speciesAbun_prev_mdl.iloc[:, id_pass_rep].copy()
+                abun_prev = np.array(abun_prev)
+                abun_prev[abun_prev == 0] = thresh_zero
+                abun_prev = 10**np.mean(np.log10(abun_prev), axis=1)
+                x = \
+                    np.array(df_speciesAbun_ratio_tmp_1)
+                x_new = -1 * np.ones(x.shape[0])
+                for row_ in range(x.shape[0]):
+                    id_tmp = np.where(x[row_, :] > 0)[0]
+                    if len(id_tmp) > 0:
+                        x_new[row_] = 10**np.mean(np.log10(x[row_, id_tmp]))
+                id_tmp = np.where(x_new > 0)[0]
+                x = x_new[id_tmp]
+                abun_prev = abun_prev.flatten()[id_tmp]
+    #                 x = 10**(np.mean(np.log10(x), axis=1)).flatten()
+                y = np.array(growth_rate_all[num_iter - 1].copy())[:, :].flatten()
+                y = y[id_tmp]
+            else:
+                id_pass_rep = []
+                for r_ in range(n_breps):
+                    id_pass_rep += [pass_ + (num_passages) * r_]
+                x = np.array(df_speciesAbun_mdl.iloc[:, id_pass_rep].copy())
+                x[x == 0] = thresh_zero
+                x = 10**np.mean(np.log10(x), axis=1).flatten()
+                x_inoc_tmp = np.array(df_speciesAbun_inoc.copy()).flatten()
+                x_inoc_tmp[x_inoc_tmp == 0] = thresh_zero
+                x /= x_inoc_tmp
+                y = np.array(growth_rate_all[num_iter - 1].copy())[:, :].flatten()
+                abun_prev = x_inoc_tmp
+
+            y[y == 0] = 1e-8
+            x[x == 0] = 1e-8
+            if return_sensitivity_ana:
+                species_names = df_speciesAbun_mdl.index.values
+                species_names = np.hstack([species_names, species_names, species_names])
+                if pass_ > 0:
+                    save_obj_return[pass_]['growth_ratio_obs'] = \
+                        np.array(df_speciesAbun_ratio_tmp_1.copy())
+                else:
+                    x_stack = x.copy()
+                    if n_breps > 1:
+                        for rep_ in range(1, n_breps):
+                            x_stack = np.hstack([x, x_stack])
+                    save_obj_return[pass_]['growth_ratio_obs'] = x_stack.copy()
             id_ = np.where((x > 0) & (y > 0))[0]
             x = np.log10(x[id_])
             y = np.log10(y[id_])
@@ -4963,6 +6449,165 @@ def fit_dynamic_Ri(df_speciesMetab_cluster, \
         return save_obj
     else:
         return save_obj, A_train_joint, b_train_joint
+    
+def fit_dynamic_Ri_logRatio(df_speciesMetab_cluster, \
+                            df_speciesAbun_prev_mdl, df_speciesAbun_next_mdl, \
+                            df_speciesAbun_ratio_mdl, p_vec_new, \
+                            file_save, num_passages=5, pass_rm=[0, 1, 2], \
+                            save_data=True, verbose=True, method="linear", alpha=0, \
+                            use_loo=True, df_speciesAbun_ratio_nonoise=None, num_brep=3, \
+                            metabs_cluster_id=None, get_prod=False, B_alone=None, \
+                            df_speciesMetab_prod=None, prod_use_prev=True, \
+                            use_dilution_term=False, dilution_factor=15000, \
+                            use_avg_for_prod=True, check_ratio_dir=True, \
+                            return_raw_data=False, mode_Ri=True, Ri=None, power_=1.0, \
+                            bounds=None, method_opt="nnls"):
+    """
+    Fits the dynamic Ri values for the given data.
+
+    Parameters:
+    - df_speciesMetab_cluster (DataFrame): The clustered species-metabolite consumption matrix $c_{\alpha\, i}$.
+    - df_speciesAbun_prev_mdl (DataFrame): The species abundances at the current passage, goes 
+                                           from passage 1 to passage 5.
+    - df_speciesAbun_next_mdl (DataFrame): The species abundances at the next passage, goes 
+                                           from passage 2 to passage 6.
+    - df_speciesAbun_ratio_mdl (DataFrame): Ratio of current and next species abundances.
+    - p_vec_new (list): List of values for p (1 - time fraction).
+    - file_save (str): File path to save the results.
+    - num_passages (int): Number of passage transitions.
+    - pass_rm (list): List of passage transitions to remove.
+    - save_data (bool): Whether to save the data or not.
+    - verbose (bool): Whether to print verbose output or not.
+    - method (str): Method for computing Ri values.
+    - alpha (float): Alpha value for computing Ri values.
+    - use_loo (bool): Whether to use leave-one-out cross-validation or not.
+    - df_speciesAbun_ratio_nonoise (DataFrame): Non-noisy species abundance ratio matrix.
+    - num_brep (int): Number of replicates.
+    - metabs_cluster_id (list): List of metabolite cluster IDs.
+    - get_prod (bool): Whether to compute production rates or not.
+    - B_alone (float): B value for computing production rates.
+    - df_speciesMetab_prod (DataFrame): Species-metabolite production matrix.
+    - prod_use_prev (bool): Whether to use previous model's production rates or not.
+    - use_dilution_term (bool): Whether to use dilution term or not.
+    - dilution_factor (float): Dilution factor.
+    - use_avg_for_prod (bool): Whether to use average for production rates or not.
+    - check_ratio_dir (bool): Whether to check ratio direction or not.
+    - return_raw_data (bool): Whether to return raw data or not.
+    - mode_Ri (bool): Mode for computing Ri values.
+    - Ri (float): Ri value.
+    - power_ (float): Power value for computing Ri values.
+
+    Returns:
+    - save_obj (dict): Dictionary containing the fitted Ri values.
+    - A_train_joint (dict): Dictionary containing the joint training data.
+    - b_train_joint (dict): Dictionary containing the joint training labels.
+    """
+    num_species = df_speciesMetab_cluster.shape[0]
+    df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
+    num_metabs = df_speciesMetab_tmp.shape[1]
+    if metabs_cluster_id is not None:
+        num_metabs = len(metabs_cluster_id)
+
+    # data for dynamic fit
+    pass_keep = remove_passages(pass_rm, num_passages=num_passages, num_brep=num_brep)
+    df_speciesAbun_prev_tmp = df_speciesAbun_prev_mdl.iloc[:, pass_keep].copy()
+    df_speciesAbun_next_tmp = df_speciesAbun_next_mdl.iloc[:, pass_keep].copy()
+    df_speciesAbun_ratio_tmp = df_speciesAbun_ratio_mdl.iloc[:, pass_keep].copy()
+
+    if df_speciesAbun_ratio_nonoise is not None:
+        df_speciesAbun_ratio_tmp_nonoise = \
+            df_speciesAbun_ratio_nonoise.iloc[:, pass_keep].copy()
+    else:
+        df_speciesAbun_ratio_tmp_nonoise = df_speciesAbun_ratio_tmp.copy()
+
+    if use_loo:
+        Ri_noMicrocosm_dynamicAll_fit_all = {}
+        Ri_noMicrocosm_dynamicAll_fit_avg = {}
+    Ri_noMicrocosm_dynamicAll_fit_joint = {}
+    A_train_joint = {}
+    b_train_joint = {}
+
+    for count_p, p_tmp in enumerate(p_vec_new):
+        if verbose:
+            print(f'count = {count_p}, p_tmp = {p_tmp}')
+        Ri_noMicrocosm_dynamicAll_fit_joint[count_p], \
+            A_train_joint[count_p], b_train_joint[count_p] = \
+                compute_Ri_logRatio(df_speciesMetab_tmp.copy(), df_speciesAbun_prev_tmp, \
+                        df_speciesAbun_next_tmp, df_speciesAbun_ratio_tmp, \
+                        p_tmp, num_passages, range(num_species), \
+                        method=method, alpha=alpha, \
+                        df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise, \
+                        metabs_cluster_id=metabs_cluster_id, get_prod=get_prod, \
+                        B_alone=B_alone, \
+                        df_speciesMetab_prod=df_speciesMetab_prod, \
+                        prod_use_prev=prod_use_prev, \
+                        use_dilution_term=use_dilution_term, \
+                        dilution_factor=dilution_factor, \
+                        use_avg_for_prod=use_avg_for_prod, \
+                        check_ratio_dir=check_ratio_dir, mode_Ri=mode_Ri, Ri=Ri, \
+                        power_=power_, bounds=bounds, method_opt=method_opt)
+
+        if use_loo:
+            if mode_Ri:
+                Ri_noMicrocosm_dynamicAll_fit_all[count_p] = \
+                    np.zeros((num_species, num_metabs))
+                Ri_noMicrocosm_dynamicAll_fit_avg[count_p] = \
+                    np.zeros((num_metabs))
+            else:
+                Ri_noMicrocosm_dynamicAll_fit_all[count_p] = \
+                    np.zeros((num_species, num_species))
+                Ri_noMicrocosm_dynamicAll_fit_avg[count_p] = \
+                    np.zeros((num_species))
+        # if use_dilution_term:
+        #     Ri_noMicrocosm_dynamicAll_fit_all[count_p] = \
+        #         np.zeros((num_species, num_metabs + 1))
+        #     Ri_noMicrocosm_dynamicAll_fit_avg[count_p] = \
+        #         np.zeros((num_metabs + 1))
+            count_species = 0
+            for species_ in range(num_species):
+                id_species = list(set(range(num_species)) - set([species_]))
+                Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :], _, _ = \
+                    compute_Ri_logRatio(df_speciesMetab_tmp.copy(), df_speciesAbun_prev_tmp, \
+                            df_speciesAbun_next_tmp, df_speciesAbun_ratio_tmp, \
+                            p_tmp, num_passages, id_species, \
+                            method=method, alpha=alpha, \
+                            df_speciesAbun_ratio_nonoise=df_speciesAbun_ratio_tmp_nonoise, \
+                            metabs_cluster_id=metabs_cluster_id, get_prod=get_prod, \
+                            B_alone=B_alone, \
+                            df_speciesMetab_prod=df_speciesMetab_prod, \
+                            prod_use_prev=prod_use_prev, \
+                            use_dilution_term=use_dilution_term, \
+                            dilution_factor=dilution_factor, \
+                            check_ratio_dir=check_ratio_dir, mode_Ri=mode_Ri, Ri=Ri, \
+                            power_=power_, bounds=bounds, method_opt=method_opt)
+                if np.sum(Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]) <= 1.5:
+                    Ri_noMicrocosm_dynamicAll_fit_avg[count_p] += \
+                        Ri_noMicrocosm_dynamicAll_fit_all[count_p][species_, :]
+                    count_species += 1
+
+
+
+
+            Ri_noMicrocosm_dynamicAll_fit_avg[count_p] /= count_species
+
+
+        if use_loo:
+            save_obj = {"Ri_noMicrocosm_dynamicAll_fit_all" : \
+                        Ri_noMicrocosm_dynamicAll_fit_all, \
+                        "Ri_noMicrocosm_dynamicAll_fit_avg" : \
+                        Ri_noMicrocosm_dynamicAll_fit_avg, \
+                        "Ri_noMicrocosm_dynamicAll_fit_joint" : \
+                        Ri_noMicrocosm_dynamicAll_fit_joint}
+        else:
+            save_obj = {"Ri_noMicrocosm_dynamicAll_fit_joint" : \
+                        Ri_noMicrocosm_dynamicAll_fit_joint}
+        if save_data:
+            with open(file_save, "wb") as file_:
+                pickle.dump(save_obj, file_) 
+    if not return_raw_data:
+        return save_obj
+    else:
+        return save_obj, A_train_joint, b_train_joint
 
 def fit_dynamic_Ri_with_sim_inoc(df_speciesMetab_cluster, \
                                  df_speciesAbun_prev_mdl, df_speciesAbun_next_mdl, \
@@ -5757,7 +7402,7 @@ def get_prod_term(df_speciesMetab_prod, df_speciesAbun_split, B_alone, \
                 np.ones((df_speciesAbun_split.shape[0], df_speciesMetab_prod.shape[1]))
     return prod_metabs_cond
 
-def metabs_to_remove_knockdown_species(df_speciesMetab, species_rm, \
+def metabs_to_remove_knockdown_species_old(df_speciesMetab, species_rm, \
                                        id_species_sensitive=None):
     if id_species_sensitive is None:
         id_species_sensitive = \
@@ -5776,11 +7421,30 @@ def metabs_to_remove_knockdown_species(df_speciesMetab, species_rm, \
     id_metabs = np.delete(id_metabs, id_metabs_rm)
     return id_metabs
 
+def metabs_to_remove_knockdown_species(df_speciesMetab, species_rm, \
+                                       id_species_sensitive=None):
+    num_species = df_speciesMetab.shape[0]
+    id_species_sensitive = np.setdiff1d(np.arange(num_species), species_rm)
+    id_metabs = \
+        np.where(np.array(df_speciesMetab)[species_rm, :] != 0)[1]
+    id_metabs = np.unique(id_metabs)
+
+    id_metabs_rm = []
+    for metab_ in id_metabs:
+        id_species = \
+            np.where(np.array(df_speciesMetab)[id_species_sensitive, metab_] != 0)[0]
+        if len(id_species) <= 1:
+            id_metabs_rm.append(metab_)
+
+    id_metabs = np.arange((df_speciesMetab.shape[1]))
+    id_metabs = np.setdiff1d(id_metabs, id_metabs_rm)
+    return id_metabs
+
 def get_RMSE_Balone_func(df_speciesMetab_cluster, df_speciesMetab_prod_cluster, p_vec_new, count_p, Ri_all, \
                     df_speciesAbun_inoc, df_speciesAbun_mdl, df_speciesAbun_prev_mdl, \
                     df_speciesAbun_ratio_mdl, abun_alone, \
                     num_passages=6, use_dilution=False, \
-                    dilution_factor=15000):
+                    dilution_factor=15000, n_breps=3):
     # evalute Ri with production
     num_metabs_clust = df_speciesMetab_cluster.shape[1]
     df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
@@ -5804,7 +7468,41 @@ def get_RMSE_Balone_func(df_speciesMetab_cluster, df_speciesMetab_prod_cluster, 
                                  get_prod=True, B_alone=abun_alone, \
                                  df_speciesMetab_prod=df_speciesMetab_prod_tmp, \
                                  prod_use_prev=False, use_dilution=use_dilution, \
-                                 dilution_factor=dilution_factor)
+                                 dilution_factor=dilution_factor, n_breps=n_breps)
+    for pass_ in range(num_passages):
+        RMSE_mat_full[pass_, 0] = RMSE_obj_all_prod[pass_]["abundance"]
+        RMSE_mat_full[pass_, 1] = RMSE_obj_all_prod[pass_]["growth_ratio"]
+    return RMSE_mat_full
+
+def get_RMSE_Balone_func_logRatio(df_speciesMetab_cluster, df_speciesMetab_prod_cluster, p_vec_new, count_p, Ri_all, \
+                    df_speciesAbun_inoc, df_speciesAbun_mdl, df_speciesAbun_prev_mdl, \
+                    df_speciesAbun_ratio_mdl, abun_alone, \
+                    num_passages=6, use_dilution=False, \
+                    dilution_factor=15000, n_breps=3):
+    # evalute Ri with production
+    num_metabs_clust = df_speciesMetab_cluster.shape[1]
+    df_speciesMetab_tmp = df_speciesMetab_cluster.copy()
+    df_speciesMetab_prod_tmp = df_speciesMetab_prod_cluster.copy()
+    # count_p = 7
+
+    RMSE_mat_full = np.zeros((num_passages, 2))
+    Ri_avg = Ri_all[count_p].copy()
+    Ri_fit = {0: Ri_avg}
+    # RMSE_sens_complete_full = np.zeros((num_passages - 1, 2))
+    sens_obj_all_prod, RMSE_obj_all_prod = \
+        blindly_pred_abun_growth_logRatio([p_vec_new[count_p]], df_speciesMetab_tmp, \
+                                 df_speciesAbun_inoc, df_speciesAbun_mdl, \
+                                 df_speciesAbun_prev_mdl, \
+                                 df_speciesAbun_ratio_mdl, \
+                                 Ri_fit, "dummy", "dummy", \
+                                 "dummy", num_passages=6, num_iter=100, \
+                                 thresh_zero=1e-8, Ri_ss=False, plot_=False, \
+                                 save_data_obj=False, \
+                                 return_sensitivity_ana=True, \
+                                 get_prod=True, B_alone=abun_alone, \
+                                 df_speciesMetab_prod=df_speciesMetab_prod_tmp, \
+                                 prod_use_prev=False, use_dilution=use_dilution, \
+                                 dilution_factor=dilution_factor, n_breps=n_breps)
     for pass_ in range(num_passages):
         RMSE_mat_full[pass_, 0] = RMSE_obj_all_prod[pass_]["abundance"]
         RMSE_mat_full[pass_, 1] = RMSE_obj_all_prod[pass_]["growth_ratio"]
